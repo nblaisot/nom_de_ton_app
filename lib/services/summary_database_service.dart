@@ -22,7 +22,7 @@ class SummaryDatabaseService {
 
     return await openDatabase(
       dbFile,
-      version: 9,
+      version: 10,  // Increment version to add characterIndex columns
       onCreate: (db, version) async {
         // Create summary_chunks table
         await db.execute('''
@@ -48,14 +48,24 @@ class SummaryDatabaseService {
             cumulativeSummary TEXT NOT NULL,
             lastUpdated TEXT NOT NULL,
             lastSummaryViewChunkIndex INTEGER,
+            lastProcessedWordIndex INTEGER,
+            lastProcessedCharacterIndex INTEGER,
             lastReadingStopChunkIndex INTEGER,
+            lastReadingStopWordIndex INTEGER,
+            lastReadingStopCharacterIndex INTEGER,
             lastReadingStopTimestamp TEXT,
             previousReadingStopChunkIndex INTEGER,
+            previousReadingStopWordIndex INTEGER,
+            previousReadingStopCharacterIndex INTEGER,
             previousReadingStopTimestamp TEXT,
             summarySinceLastTime TEXT,
             summarySinceLastTimeChunkIndex INTEGER,
+            summarySinceLastTimeWordIndex INTEGER,
+            summarySinceLastTimeCharacterIndex INTEGER,
             charactersSummary TEXT,
             charactersSummaryChunkIndex INTEGER,
+            charactersSummaryWordIndex INTEGER,
+            charactersSummaryCharacterIndex INTEGER,
             importantWords TEXT,
             generalSummaryJson TEXT,
             generalSummaryUpdatedAt TEXT,
@@ -216,6 +226,90 @@ class SummaryDatabaseService {
             await db.execute('''
               ALTER TABLE summary_cache 
               ADD COLUMN characterProfilesUpdatedAt TEXT
+            ''');
+          } catch (e) {
+            // Column might already exist, ignore
+          }
+        }
+        if (oldVersion < 10) {
+          // Add wordIndex columns (legacy support) if they don't exist
+          try {
+            await db.execute('''
+              ALTER TABLE summary_cache 
+              ADD COLUMN lastProcessedWordIndex INTEGER
+            ''');
+          } catch (e) {
+            // Column might already exist, ignore
+          }
+          try {
+            await db.execute('''
+              ALTER TABLE summary_cache 
+              ADD COLUMN lastReadingStopWordIndex INTEGER
+            ''');
+          } catch (e) {
+            // Column might already exist, ignore
+          }
+          try {
+            await db.execute('''
+              ALTER TABLE summary_cache 
+              ADD COLUMN previousReadingStopWordIndex INTEGER
+            ''');
+          } catch (e) {
+            // Column might already exist, ignore
+          }
+          try {
+            await db.execute('''
+              ALTER TABLE summary_cache 
+              ADD COLUMN summarySinceLastTimeWordIndex INTEGER
+            ''');
+          } catch (e) {
+            // Column might already exist, ignore
+          }
+          try {
+            await db.execute('''
+              ALTER TABLE summary_cache 
+              ADD COLUMN charactersSummaryWordIndex INTEGER
+            ''');
+          } catch (e) {
+            // Column might already exist, ignore
+          }
+          // Add characterIndex columns to replace wordIndex-based tracking
+          try {
+            await db.execute('''
+              ALTER TABLE summary_cache 
+              ADD COLUMN lastProcessedCharacterIndex INTEGER
+            ''');
+          } catch (e) {
+            // Column might already exist, ignore
+          }
+          try {
+            await db.execute('''
+              ALTER TABLE summary_cache 
+              ADD COLUMN lastReadingStopCharacterIndex INTEGER
+            ''');
+          } catch (e) {
+            // Column might already exist, ignore
+          }
+          try {
+            await db.execute('''
+              ALTER TABLE summary_cache 
+              ADD COLUMN previousReadingStopCharacterIndex INTEGER
+            ''');
+          } catch (e) {
+            // Column might already exist, ignore
+          }
+          try {
+            await db.execute('''
+              ALTER TABLE summary_cache 
+              ADD COLUMN summarySinceLastTimeCharacterIndex INTEGER
+            ''');
+          } catch (e) {
+            // Column might already exist, ignore
+          }
+          try {
+            await db.execute('''
+              ALTER TABLE summary_cache 
+              ADD COLUMN charactersSummaryCharacterIndex INTEGER
             ''');
           } catch (e) {
             // Column might already exist, ignore

@@ -230,7 +230,10 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
 
     final theme = Theme.of(context);
     final baseColor = theme.colorScheme.onSurface;
-    final textHeightBehavior = DefaultTextHeightBehavior.of(context);
+    // Use maybeOf to avoid error if DefaultTextHeightBehavior is not in widget tree
+    // Provide default TextHeightBehavior if none is found
+    final textHeightBehavior = DefaultTextHeightBehavior.maybeOf(context) ??
+        const TextHeightBehavior();
     final baseStyle = theme.textTheme.bodyMedium?.copyWith(
           fontSize: _fontSize,
           height: 1.6,

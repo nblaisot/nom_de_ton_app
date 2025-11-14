@@ -212,9 +212,68 @@ class EnhancedSummaryService {
     return result;
   }
 
+  /// Extract text from book up to a specific character index
+  /// This is the new method that uses characterIndex instead of wordIndex
+  Future<List<ChapterText>> _extractTextUpToCharacterIndex(
+    Book book,
+    int targetCharacterIndex,
+  ) async {
+    final epub = await _bookService.loadEpubBook(book.filePath);
+    final chapters = _parseChapters(epub);
+    
+    if (chapters.isEmpty) {
+      return [];
+    }
+
+    final result = <ChapterText>[];
+    int currentCharacterCount = 0;
+
+    for (final chapter in chapters) {
+      final htmlText = chapter.htmlContent;
+      final plainText = _extractTextFromHtml(htmlText);
+      
+      if (plainText.isEmpty) continue;
+
+      final chapterCharacterCount = plainText.length;
+
+      if (currentCharacterCount + chapterCharacterCount <= targetCharacterIndex) {
+        // Entire chapter fits
+        result.add(ChapterText(
+          chapterIndex: chapter.index,
+          title: chapter.title,
+          text: plainText,
+          isComplete: true,
+        ));
+        currentCharacterCount += chapterCharacterCount;
+      } else {
+        // Partial chapter - extract only up to targetCharacterIndex
+        final remainingCharacters = targetCharacterIndex - currentCharacterCount;
+        if (remainingCharacters > 0) {
+          final partialText = plainText.substring(0, remainingCharacters);
+          result.add(ChapterText(
+            chapterIndex: chapter.index,
+            title: chapter.title,
+            text: partialText,
+            isComplete: false,
+          ));
+        }
+        break; // We've reached the target
+      }
+    }
+
+    return result;
+  }
+
   /// Estimate token count (rough approximation: 1 token ≈ 4 characters)
   int _estimateTokenCount(String text) {
     return (text.length / 4).round();
+  }
+
+  /// Estimate character index from word index (for backward compatibility)
+  /// This is a rough approximation: average word length is ~5 characters + 1 space
+  int _estimateCharacterIndexFromWordIndex(int wordIndex, Book book) {
+    // Rough estimate: 6 characters per word on average
+    return wordIndex * 6;
   }
 
   /// Split a large paragraph into smaller pieces by sentences
@@ -743,63 +802,65 @@ class EnhancedSummaryService {
   }
 
   /// Get or generate summary up to the current reading position (from beginning)
-  /// Uses currentWordIndex to extract text exactly up to the reading position
+  /// Uses currentCharacterIndex to extract text exactly up to the reading position
   Future<String> getSummaryUpToPosition(
     Book book,
     ReadingProgress progress,
     String languageCode,
   ) async {
     try {
-      final currentWordIndex = progress.currentWordIndex ?? 0;
+      // Use currentCharacterIndex if available, fallback to currentWordIndex for backward compatibility
+      final currentCharacterIndex = progress.currentCharacterIndex ?? 
+          (progress.currentWordIndex != null ? _estimateCharacterIndexFromWordIndex(progress.currentWordIndex!, book) : 0);
       final language = _getLanguage(languageCode);
       
-      if (currentWordIndex <= 0) {
+      if (currentCharacterIndex <= 0) {
         return 'No content read yet.';
       }
 
-      // Extract text up to the exact word index
-      final chapterTexts = await _extractTextUpToWordIndex(book, currentWordIndex);
+      // Extract text up to the exact character index
+      final chapterTexts = await _extractTextUpToCharacterIndex(book, currentCharacterIndex);
       
       if (chapterTexts.isEmpty) {
         throw Exception('No content found in book');
       }
 
-      // Check cache - we need to check if cached summary covers at least currentWordIndex
+      // Check cache - we need to check if cached summary covers at least currentCharacterIndex
       final cache = await _dbService.getSummaryCache(book.id);
-      final cachedWordIndex = cache?.lastProcessedWordIndex ?? -1;
+      final cachedCharacterIndex = cache?.lastProcessedCharacterIndex ?? -1;
       
       if (cache != null && 
-          cachedWordIndex >= currentWordIndex &&
+          cachedCharacterIndex >= currentCharacterIndex &&
           cache.cumulativeSummary.isNotEmpty) {
         // Return cached summary if it covers the current position
         return cache.cumulativeSummary;
       }
 
       // Process chapters that haven't been processed yet
-      final lastProcessedWordIndex = cachedWordIndex;
+      final lastProcessedCharacterIndex = cachedCharacterIndex;
       final chaptersToProcess = <ChapterText>[];
       
-      int wordOffset = 0;
+      int characterOffset = 0;
       for (final chapterText in chapterTexts) {
-        final chapterWords = tokenizePreservingWhitespace(chapterText.text);
-        final chapterWordCount = chapterWords.length;
-        final chapterStartWordIndex = wordOffset;
-        final chapterEndWordIndex = wordOffset + chapterWordCount - 1;
+        final chapterCharacterCount = chapterText.text.length;
+        final chapterStartCharacterIndex = characterOffset;
+        final chapterEndCharacterIndex = characterOffset + chapterCharacterCount - 1;
         
-        if (chapterEndWordIndex > lastProcessedWordIndex) {
+        if (chapterEndCharacterIndex > lastProcessedCharacterIndex) {
           // This chapter needs processing (or re-processing if partially processed)
-          if (chapterStartWordIndex <= lastProcessedWordIndex) {
+          if (chapterStartCharacterIndex <= lastProcessedCharacterIndex) {
             // Partial chapter - extract only the new part
-            final processedWords = lastProcessedWordIndex - chapterStartWordIndex + 1;
-            final remainingWords = chapterWords.sublist(processedWords);
-            final newText = remainingWords.join('');
-            if (newText.trim().isNotEmpty) {
-              chaptersToProcess.add(ChapterText(
-                chapterIndex: chapterText.chapterIndex,
-                title: chapterText.title,
-                text: newText,
-                isComplete: chapterText.isComplete,
-              ));
+            final processedCharacters = lastProcessedCharacterIndex - chapterStartCharacterIndex + 1;
+            if (processedCharacters < chapterText.text.length) {
+              final newText = chapterText.text.substring(processedCharacters);
+              if (newText.trim().isNotEmpty) {
+                chaptersToProcess.add(ChapterText(
+                  chapterIndex: chapterText.chapterIndex,
+                  title: chapterText.title,
+                  text: newText,
+                  isComplete: chapterText.isComplete,
+                ));
+              }
             }
           } else {
             // Entire chapter needs processing
@@ -807,7 +868,7 @@ class EnhancedSummaryService {
           }
         }
         
-        wordOffset += chapterWordCount;
+        characterOffset += chapterCharacterCount;
       }
 
       // Process new chapters
@@ -909,7 +970,7 @@ class EnhancedSummaryService {
         lastUpdated: DateTime.now(),
       )).copyWith(
         lastProcessedChunkIndex: maxChapterIndex,
-        lastProcessedWordIndex: currentWordIndex,
+        lastProcessedCharacterIndex: currentCharacterIndex,
         cumulativeSummary: narrative,
         generalSummaryJson: generalSummary.toJsonString(),
         generalSummaryUpdatedAt: DateTime.now(),
@@ -925,47 +986,54 @@ class EnhancedSummaryService {
   }
 
   /// Get summary since last reading session
-  /// Uses currentWordIndex to extract text exactly up to the reading position
+  /// Uses currentCharacterIndex to extract text exactly up to the reading position
   Future<String> getSummarySinceLastTime(
     Book book,
     ReadingProgress progress,
     String languageCode,
   ) async {
     try {
-      final currentWordIndex = progress.currentWordIndex ?? 0;
+      // Use currentCharacterIndex if available, fallback to currentWordIndex for backward compatibility
+      final currentCharacterIndex = progress.currentCharacterIndex ?? 
+          (progress.currentWordIndex != null ? _estimateCharacterIndexFromWordIndex(progress.currentWordIndex!, book) : 0);
       final language = _getLanguage(languageCode);
       
       // Get cache to find last reading stop
       final cache = await _dbService.getSummaryCache(book.id);
-      final lastReadingStopWordIndex = cache?.lastReadingStopWordIndex;
+      // Use characterIndex if available, fallback to wordIndex for backward compatibility
+      final lastReadingStopCharacterIndex = cache?.lastReadingStopCharacterIndex ??
+          (cache?.lastReadingStopWordIndex != null ? _estimateCharacterIndexFromWordIndex(cache!.lastReadingStopWordIndex!, book) : null);
       final lastReadingStopTimestamp = cache?.lastReadingStopTimestamp;
-      final previousReadingStopWordIndex = cache?.previousReadingStopWordIndex;
+      final previousReadingStopCharacterIndex = cache?.previousReadingStopCharacterIndex ??
+          (cache?.previousReadingStopWordIndex != null ? _estimateCharacterIndexFromWordIndex(cache!.previousReadingStopWordIndex!, book) : null);
       final previousReadingStopTimestamp = cache?.previousReadingStopTimestamp;
 
       // Check if we have a cached "since last time" summary that's still valid
+      final cachedSinceLastTimeCharacterIndex = cache?.summarySinceLastTimeCharacterIndex ??
+          (cache?.summarySinceLastTimeWordIndex != null ? _estimateCharacterIndexFromWordIndex(cache!.summarySinceLastTimeWordIndex!, book) : null);
       if (cache != null && 
           cache.summarySinceLastTime != null &&
-          cache.summarySinceLastTimeWordIndex == currentWordIndex &&
-          cache.lastReadingStopWordIndex == lastReadingStopWordIndex) {
+          cachedSinceLastTimeCharacterIndex == currentCharacterIndex &&
+          lastReadingStopCharacterIndex == cache.lastReadingStopCharacterIndex) {
         return cache.summarySinceLastTime!;
       }
 
       // Determine the session range
       // "Since last time" shows the last completed reading session
-      // Session starts from previousReadingStopWordIndex (or 0 if none) to lastReadingStopWordIndex
+      // Session starts from previousReadingStopCharacterIndex (or 0 if none) to lastReadingStopCharacterIndex
       // This is the session that ended when the user last stopped reading
-      final sessionStartWordIndex = previousReadingStopWordIndex ?? 0;
-      final sessionEndWordIndex = lastReadingStopWordIndex;
+      final sessionStartCharacterIndex = previousReadingStopCharacterIndex ?? 0;
+      final sessionEndCharacterIndex = lastReadingStopCharacterIndex;
 
       // If no reading stops recorded, or user hasn't completed a session yet
-      if (lastReadingStopWordIndex == null || 
-          sessionEndWordIndex == null || 
-          sessionEndWordIndex >= currentWordIndex) {
+      if (lastReadingStopCharacterIndex == null || 
+          sessionEndCharacterIndex == null || 
+          sessionEndCharacterIndex >= currentCharacterIndex) {
         // First reading session or no new content - show what they've read so far
         // Get concise beginning summary
         String conciseBeginning = '';
-        if (currentWordIndex > 0) {
-          final beginningTexts = await _extractTextUpToWordIndex(book, currentWordIndex);
+        if (currentCharacterIndex > 0) {
+          final beginningTexts = await _extractTextUpToCharacterIndex(book, currentCharacterIndex);
           if (beginningTexts.isNotEmpty) {
             final beginningText = beginningTexts.map((ct) => ct.text).join('\n\n');
             final beginningSummary = await _generateChunkSummary(beginningText, null, language);
@@ -985,7 +1053,7 @@ class EnhancedSummaryService {
         return '$conciseBeginning\n\n$sinceLastTimeHeader\n\nNo completed reading session yet.';
       }
 
-      if (sessionStartWordIndex >= sessionEndWordIndex) {
+      if (sessionStartCharacterIndex >= sessionEndCharacterIndex) {
         // No content in the session
         String timestampText = '';
         if (lastReadingStopTimestamp != null) {
@@ -997,10 +1065,10 @@ class EnhancedSummaryService {
         return 'Beginning of story.\n\n$sinceLastTimeHeader\n\nNo content in this session.';
       }
 
-      // Get concise summary of beginning (up to sessionStartWordIndex) for context
+      // Get concise summary of beginning (up to sessionStartCharacterIndex) for context
       String conciseBeginning = '';
-      if (sessionStartWordIndex > 0) {
-        final beginningTexts = await _extractTextUpToWordIndex(book, sessionStartWordIndex);
+      if (sessionStartCharacterIndex > 0) {
+        final beginningTexts = await _extractTextUpToCharacterIndex(book, sessionStartCharacterIndex);
         if (beginningTexts.isNotEmpty) {
           final beginningText = beginningTexts.map((ct) => ct.text).join('\n\n');
           final beginningSummary = await _generateChunkSummary(beginningText, null, language);
@@ -1010,34 +1078,32 @@ class EnhancedSummaryService {
         }
       }
 
-      // Extract text for the session (from sessionStartWordIndex to sessionEndWordIndex)
-      final sessionEndTexts = await _extractTextUpToWordIndex(book, sessionEndWordIndex);
+      // Extract text for the session (from sessionStartCharacterIndex to sessionEndCharacterIndex)
+      final sessionEndTexts = await _extractTextUpToCharacterIndex(book, sessionEndCharacterIndex);
       
       // Calculate the text that belongs to the session
       String sessionText = '';
-      int wordOffset = 0;
+      int characterOffset = 0;
       
       for (final chapterText in sessionEndTexts) {
-        final chapterWords = tokenizePreservingWhitespace(chapterText.text);
-        final chapterWordCount = chapterWords.length;
-        final chapterStartWordIndex = wordOffset;
-        final chapterEndWordIndex = wordOffset + chapterWordCount - 1;
+        final chapterCharacterCount = chapterText.text.length;
+        final chapterStartCharacterIndex = characterOffset;
+        final chapterEndCharacterIndex = characterOffset + chapterCharacterCount - 1;
         
-        if (chapterEndWordIndex >= sessionStartWordIndex && chapterStartWordIndex < sessionEndWordIndex) {
+        if (chapterEndCharacterIndex >= sessionStartCharacterIndex && chapterStartCharacterIndex < sessionEndCharacterIndex) {
           // This chapter overlaps with the session
           int startInChapter = 0;
-          int endInChapter = chapterWordCount;
+          int endInChapter = chapterCharacterCount;
           
-          if (chapterStartWordIndex < sessionStartWordIndex) {
-            startInChapter = sessionStartWordIndex - chapterStartWordIndex;
+          if (chapterStartCharacterIndex < sessionStartCharacterIndex) {
+            startInChapter = sessionStartCharacterIndex - chapterStartCharacterIndex;
           }
-          if (chapterEndWordIndex > sessionEndWordIndex) {
-            endInChapter = sessionEndWordIndex - chapterStartWordIndex + 1;
+          if (chapterEndCharacterIndex > sessionEndCharacterIndex) {
+            endInChapter = sessionEndCharacterIndex - chapterStartCharacterIndex + 1;
           }
           
           if (endInChapter > startInChapter) {
-            final sessionWords = chapterWords.sublist(startInChapter, endInChapter);
-            final sessionChapterText = sessionWords.join('');
+            final sessionChapterText = chapterText.text.substring(startInChapter, endInChapter);
             if (sessionText.isNotEmpty) {
               sessionText = '$sessionText\n\n$sessionChapterText';
             } else {
@@ -1046,7 +1112,7 @@ class EnhancedSummaryService {
           }
         }
         
-        wordOffset += chapterWordCount;
+        characterOffset += chapterCharacterCount;
       }
 
       if (sessionText.trim().isEmpty) {
@@ -1119,7 +1185,7 @@ class EnhancedSummaryService {
       )).copyWith(
         summarySinceLastTime: fullSummary,
         summarySinceLastTimeChunkIndex: maxChapterIndex,
-        summarySinceLastTimeWordIndex: currentWordIndex,
+        summarySinceLastTimeCharacterIndex: currentCharacterIndex,
       );
       await _dbService.saveSummaryCache(updatedCache);
       
@@ -1137,15 +1203,17 @@ class EnhancedSummaryService {
     String languageCode,
   ) async {
     try {
-      final currentWordIndex = progress.currentWordIndex ?? 0;
+      // Use currentCharacterIndex if available, fallback to currentWordIndex for backward compatibility
+      final currentCharacterIndex = progress.currentCharacterIndex ?? 
+          (progress.currentWordIndex != null ? _estimateCharacterIndexFromWordIndex(progress.currentWordIndex!, book) : 0);
       final language = _getLanguage(languageCode);
       
-      if (currentWordIndex <= 0) {
+      if (currentCharacterIndex <= 0) {
         return 'No content read yet.';
       }
 
-      // Extract text up to the exact word index
-      final chapterTexts = await _extractTextUpToWordIndex(book, currentWordIndex);
+      // Extract text up to the exact character index
+      final chapterTexts = await _extractTextUpToCharacterIndex(book, currentCharacterIndex);
       
       if (chapterTexts.isEmpty) {
         throw Exception('No content found in book');
@@ -1159,33 +1227,35 @@ class EnhancedSummaryService {
           CharacterProfilesPayload(profiles: []);
       final existingCharacterNames = existingProfiles.profiles.map((p) => p.name.toLowerCase()).toSet();
       
-      // Get last processed word index for characters
-      final lastCharacterProcessedWordIndex = cache?.charactersSummaryWordIndex ?? -1;
+      // Get last processed character index for characters
+      final lastCharacterProcessedCharacterIndex = cache?.charactersSummaryCharacterIndex ?? -1;
 
       // Check if we have a cached summary that's up to date
       if (cache != null && 
           cache.charactersSummary != null &&
-          lastCharacterProcessedWordIndex >= currentWordIndex) {
+          lastCharacterProcessedCharacterIndex >= currentCharacterIndex) {
         return cache.charactersSummary!;
       }
 
       // Process chapters that haven't been processed yet
-      int wordOffset = 0;
+      int characterOffset = 0;
       for (final chapterText in chapterTexts) {
-        final chapterWords = tokenizePreservingWhitespace(chapterText.text);
-        final chapterWordCount = chapterWords.length;
-        final chapterStartWordIndex = wordOffset;
-        final chapterEndWordIndex = wordOffset + chapterWordCount - 1;
+        final chapterCharacterCount = chapterText.text.length;
+        final chapterStartCharacterIndex = characterOffset;
+        final chapterEndCharacterIndex = characterOffset + chapterCharacterCount - 1;
         
-        if (chapterEndWordIndex > lastCharacterProcessedWordIndex) {
+        if (chapterEndCharacterIndex > lastCharacterProcessedCharacterIndex) {
           // This chapter needs processing (or re-processing if partially processed)
           String textToProcess = chapterText.text;
           
-          if (chapterStartWordIndex <= lastCharacterProcessedWordIndex) {
+          if (chapterStartCharacterIndex <= lastCharacterProcessedCharacterIndex) {
             // Partial chapter - extract only the new part
-            final processedWords = lastCharacterProcessedWordIndex - chapterStartWordIndex + 1;
-            final remainingWords = chapterWords.sublist(processedWords);
-            textToProcess = remainingWords.join('');
+            final processedCharacters = lastCharacterProcessedCharacterIndex - chapterStartCharacterIndex + 1;
+            if (processedCharacters < chapterText.text.length) {
+              textToProcess = chapterText.text.substring(processedCharacters);
+            } else {
+              textToProcess = '';
+            }
           }
           
           if (textToProcess.trim().isNotEmpty) {
@@ -1216,7 +1286,7 @@ class EnhancedSummaryService {
           }
         }
         
-        wordOffset += chapterWordCount;
+        characterOffset += chapterCharacterCount;
       }
 
       // Generate final character profiles using structured data
@@ -1240,7 +1310,7 @@ class EnhancedSummaryService {
         characterProfilesUpdatedAt: DateTime.now(),
         charactersSummary: charactersSummary,
         charactersSummaryChunkIndex: maxChapterIndex,
-        charactersSummaryWordIndex: currentWordIndex,
+        charactersSummaryCharacterIndex: currentCharacterIndex,
       );
       
       await _dbService.saveSummaryCache(updatedCache);
