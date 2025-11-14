@@ -1,12 +1,14 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:epubx/epubx.dart';
+import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'dart:convert';
 import '../models/book.dart';
 import '../models/reading_progress.dart';
+import 'summary_database_service.dart';
 
 class BookService {
   static const String _booksKey = 'books';
@@ -54,10 +56,22 @@ class BookService {
       // Parse the EPUB to get metadata
       final epub = await EpubReader.readBook(await epubFile.readAsBytes());
       
+      final bookId = _uuid.v4();
+      
+      // Extract cover image
+      String? coverImagePath;
+      try {
+        coverImagePath = await _extractCoverImage(epub, bookId);
+      } catch (e) {
+        debugPrint('Failed to extract cover image: $e');
+        // Continue without cover image
+      }
+      
       final book = Book(
-        id: _uuid.v4(),
+        id: bookId,
         title: epub.Title?.isNotEmpty == true ? epub.Title! : 'Unknown Title',
         author: epub.Author?.isNotEmpty == true ? epub.Author! : 'Unknown Author',
+        coverImagePath: coverImagePath,
         filePath: storedPath,
         dateAdded: DateTime.now(),
       );
@@ -69,6 +83,134 @@ class BookService {
     } catch (e) {
       if (e is Exception) rethrow;
       throw Exception('Failed to import EPUB: $e');
+    }
+  }
+
+  /// Extract cover image from EPUB and save it to disk
+  Future<String?> _extractCoverImage(EpubBook epub, String bookId) async {
+    try {
+      String? coverPath;
+      
+      // Method 1: Check CoverImage property (Image object from image package)
+      // Note: CoverImage is an Image object from the image package (dependency of epubx)
+      if (epub.CoverImage != null) {
+        try {
+          // Convert Image to bytes (PNG format) using encodePng from image package
+          final imageBytes = img.encodePng(epub.CoverImage!);
+          if (imageBytes.isNotEmpty) {
+            coverPath = await _saveCoverImage(imageBytes, bookId, 'png');
+            if (coverPath != null) {
+              return coverPath;
+            }
+          }
+        } catch (e) {
+          debugPrint('Error extracting cover from CoverImage: $e');
+        }
+      }
+      
+      // Method 2: Look for cover image in Content.Images
+      if (epub.Content?.Images != null && epub.Content!.Images!.isNotEmpty) {
+        // Try to find cover image by common names
+        final coverNames = ['cover', 'Cover', 'COVER', 'cover.jpg', 'cover.png', 'cover.jpeg', 'cover.webp'];
+        
+        for (final imageEntry in epub.Content!.Images!.entries) {
+          final imageKey = imageEntry.key.toLowerCase();
+          if (coverNames.any((name) => imageKey.contains(name.toLowerCase()))) {
+            try {
+              final imageFile = imageEntry.value;
+              final imageData = imageFile.Content;
+              if (imageData != null && imageData.isNotEmpty) {
+                // Determine extension from file name or content
+                String? extension;
+                if (imageKey.contains('.png')) {
+                  extension = 'png';
+                } else if (imageKey.contains('.jpg') || imageKey.contains('.jpeg')) {
+                  extension = 'jpg';
+                } else if (imageKey.contains('.webp')) {
+                  extension = 'webp';
+                }
+                coverPath = await _saveCoverImage(imageData, bookId, extension);
+                if (coverPath != null) {
+                  return coverPath;
+                }
+              }
+            } catch (e) {
+              debugPrint('Error extracting cover from images: $e');
+              continue;
+            }
+          }
+        }
+        
+        // If no cover found by name, try the first image
+        if (coverPath == null && epub.Content!.Images!.isNotEmpty) {
+          try {
+            final firstImageFile = epub.Content!.Images!.values.first;
+            final imageData = firstImageFile.Content;
+            if (imageData != null && imageData.isNotEmpty) {
+              // Determine extension from file name
+              final firstImageKey = epub.Content!.Images!.keys.first.toLowerCase();
+              String? extension;
+              if (firstImageKey.contains('.png')) {
+                extension = 'png';
+              } else if (firstImageKey.contains('.jpg') || firstImageKey.contains('.jpeg')) {
+                extension = 'jpg';
+              } else if (firstImageKey.contains('.webp')) {
+                extension = 'webp';
+              }
+              coverPath = await _saveCoverImage(Uint8List.fromList(imageData), bookId, extension);
+              if (coverPath != null) {
+                return coverPath;
+              }
+            }
+          } catch (e) {
+            debugPrint('Error extracting first image as cover: $e');
+          }
+        }
+      }
+      
+      return coverPath;
+    } catch (e) {
+      debugPrint('Error extracting cover image: $e');
+      return null;
+    }
+  }
+
+  /// Save cover image to disk
+  Future<String?> _saveCoverImage(List<int> imageData, String bookId, String? preferredExtension) async {
+    try {
+      final booksDir = await getBooksDirectory();
+      final coversDir = Directory('$booksDir/covers');
+      if (!await coversDir.exists()) {
+        await coversDir.create(recursive: true);
+      }
+      
+      // Determine file extension from image data or preferred extension
+      String extension = preferredExtension ?? 'jpg';
+      if (preferredExtension == null && imageData.length >= 4) {
+        // Check for PNG signature
+        if (imageData[0] == 0x89 && imageData[1] == 0x50 && imageData[2] == 0x4E && imageData[3] == 0x47) {
+          extension = 'png';
+        }
+        // Check for JPEG signature
+        else if (imageData[0] == 0xFF && imageData[1] == 0xD8) {
+          extension = 'jpg';
+        }
+        // Check for WebP signature
+        else if (imageData.length >= 12 &&
+                 imageData[0] == 0x52 && imageData[1] == 0x49 && imageData[2] == 0x46 && imageData[3] == 0x46 &&
+                 imageData[8] == 0x57 && imageData[9] == 0x45 && imageData[10] == 0x42 && imageData[11] == 0x50) {
+          extension = 'webp';
+        }
+      }
+      
+      final coverPath = '$booksDir/covers/$bookId.$extension';
+      final coverFile = File(coverPath);
+      await coverFile.writeAsBytes(imageData);
+      
+      return coverPath;
+    } catch (e) {
+      debugPrint('Error saving cover image: $e');
+      return null;
     }
   }
 
@@ -173,8 +315,29 @@ class BookService {
         await file.delete();
       }
       
+      // Delete cover image if it exists
+      if (book.coverImagePath != null && book.coverImagePath!.isNotEmpty) {
+        try {
+          final coverFile = File(book.coverImagePath!);
+          if (await coverFile.exists()) {
+            await coverFile.delete();
+          }
+        } catch (e) {
+          debugPrint('Error deleting cover image: $e');
+        }
+      }
+      
       // Delete reading progress
       await prefs.remove('$_progressKey${book.id}');
+      
+      // Delete summary cache and chunks
+      try {
+        final summaryDbService = SummaryDatabaseService();
+        await summaryDbService.deleteBookSummaries(book.id);
+      } catch (e) {
+        // Don't throw - summary deletion is best effort
+        debugPrint('Failed to delete summaries: $e');
+      }
     } catch (e) {
       throw Exception('Failed to delete book: $e');
     }

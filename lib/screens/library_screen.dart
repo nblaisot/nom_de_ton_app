@@ -1,12 +1,13 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:memoreader/l10n/app_localizations.dart';
 import 'package:file_picker/file_picker.dart';
 import '../models/book.dart';
 import '../models/reading_progress.dart';
 import '../services/book_service.dart';
+import '../services/background_summary_service.dart';
 import 'reader_screen.dart';
+import 'settings_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key});
@@ -68,6 +69,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
         _bookTotalChapters = chaptersMap;
         _isLoading = false;
       });
+      
+      // Don't generate summaries on library load - only when user leaves a book or app goes to background
     } catch (e) {
       setState(() {
         _errorMessage = 'Error loading books: $e';
@@ -94,18 +97,32 @@ class _LibraryScreenState extends State<LibraryScreen> {
     });
 
     try {
+      debugPrint('Starting file picker...');
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['epub'],
+        withData: false,
+        withReadStream: false,
       );
 
-      if (result != null && result.files.single.path != null) {
-        final filePath = result.files.single.path!;
+      debugPrint('File picker result: ${result?.files.length ?? 0} files');
+      
+      if (result != null && result.files.isNotEmpty) {
+        final pickedFile = result.files.single;
+        debugPrint('Picked file: ${pickedFile.name}, path: ${pickedFile.path}');
+        
+        if (pickedFile.path == null) {
+          throw Exception('File path is null. This may be a macOS permissions issue.');
+        }
+        final filePath = pickedFile.path!;
         final file = File(filePath);
         
+        debugPrint('Checking if file exists: $filePath');
         if (!await file.exists()) {
-          throw Exception('Selected file no longer exists');
+          throw Exception('Selected file no longer exists: $filePath');
         }
+        
+        debugPrint('File exists, starting import...');
         
         // Show progress indicator
         if (mounted) {
@@ -146,16 +163,25 @@ class _LibraryScreenState extends State<LibraryScreen> {
           );
           _loadBooks();
         }
+      } else {
+        debugPrint('File picker was cancelled or returned null');
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('Error importing EPUB: $e');
+      debugPrint('Stack trace: $stackTrace');
       if (mounted) {
         final l10n = AppLocalizations.of(context)!;
-        Navigator.pop(context); // Close progress dialog if open
+        // Try to close progress dialog if open
+        try {
+          Navigator.pop(context);
+        } catch (_) {
+          // Dialog might not be open
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(l10n.errorImportingBook(e.toString())),
+            content: Text('${l10n.errorImportingBook(e.toString())}\n\nVérifiez les permissions macOS dans Préférences Système > Sécurité.'),
             backgroundColor: Colors.red,
-            duration: const Duration(seconds: 4),
+            duration: const Duration(seconds: 6),
           ),
         );
       }
@@ -172,10 +198,48 @@ class _LibraryScreenState extends State<LibraryScreen> {
       MaterialPageRoute(
         builder: (context) => ReaderScreen(book: book),
       ),
-    ).then((_) {
-      // Reload books in case reading progress changed
-      _loadBooks();
+    ).then((_) async {
+      // User returned from reading a book
+      // Reload books to refresh progress first
+      await _loadBooks();
+      
+      // Generate summaries for the book that was just read (if it has progress)
+      // Use fresh progress after reload
+      final progress = _bookProgress[book.id];
+      if (progress != null && progress.currentChapterIndex != null && progress.currentChapterIndex! > 0) {
+        final appLocale = Localizations.localeOf(context);
+        final languageCode = appLocale.languageCode;
+        // Generate in background without blocking - fire and forget
+        // generateSummariesIfNeeded is now void and completely non-blocking
+        BackgroundSummaryService().generateSummariesIfNeeded(
+          book,
+          progress,
+          languageCode,
+        );
+      }
     });
+  }
+
+  /// Trigger background summary generation for all books that need it
+  void _triggerBackgroundSummaryGeneration(
+    List<Book> books,
+    Map<String, ReadingProgress> progressMap,
+  ) {
+    final appLocale = Localizations.localeOf(context);
+    final languageCode = appLocale.languageCode;
+    
+    for (final book in books) {
+      final progress = progressMap[book.id];
+      if (progress != null && progress.currentChapterIndex != null && progress.currentChapterIndex! > 0) {
+        // Generate in background without waiting (void method, completely non-blocking)
+        // generateSummariesIfNeeded handles errors internally
+        BackgroundSummaryService().generateSummariesIfNeeded(
+          book,
+          progress,
+          languageCode,
+        );
+      }
+    }
   }
 
   void _showDeleteDialog(Book book, int index) {
@@ -226,6 +290,55 @@ class _LibraryScreenState extends State<LibraryScreen> {
     });
   }
 
+  void _showDeleteConfirmationDialog(Book book) {
+    final l10n = AppLocalizations.of(context)!;
+    showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        content: Text(l10n.deleteBookConfirm),
+        actions: [
+          // Cancel button on the left
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(l10n.cancel),
+          ),
+          // Confirm button on the right
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: Text(l10n.confirm),
+          ),
+        ],
+      ),
+    ).then((confirmed) async {
+      if (confirmed == true) {
+        try {
+          await _bookService.deleteBook(book);
+          if (mounted) {
+            final l10n = AppLocalizations.of(context)!;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(l10n.bookDeleted(book.title)),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+            _loadBooks();
+          }
+        } catch (e) {
+          if (mounted) {
+            final l10n = AppLocalizations.of(context)!;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(l10n.errorDeletingBook(e.toString())),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
@@ -234,6 +347,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
         title: Text(l10n.library),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const SettingsScreen(),
+                ),
+              );
+            },
+            tooltip: l10n.settings,
+          ),
           if (_books.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.refresh),
@@ -320,14 +445,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
                               child: const Icon(Icons.delete, color: Colors.white),
                             ),
                             onDismissed: (direction) {
+                              final messenger = ScaffoldMessenger.of(context);
+                              final l10n = AppLocalizations.of(context)!;
                               _bookService.deleteBook(book).then((_) {
                                 if (mounted) {
                                   _loadBooks();
                                 }
                               }).catchError((e) {
                                 if (mounted) {
-                                  final messenger = ScaffoldMessenger.of(context);
-                                  final l10n = AppLocalizations.of(context)!;
                                   messenger.showSnackBar(
                                     SnackBar(
                                       content: Text(l10n.errorDeletingBook(e.toString())),
@@ -339,6 +464,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                             },
                             confirmDismiss: (direction) async {
                               final l10n = AppLocalizations.of(context)!;
+                              final messenger = ScaffoldMessenger.of(context);
                               final result = await showDialog<bool>(
                                 context: context,
                                 builder: (context) => AlertDialog(
@@ -361,8 +487,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                 try {
                                   await _bookService.deleteBook(book);
                                   if (mounted) {
-                                    final l10n = AppLocalizations.of(context)!;
-                                    final messenger = ScaffoldMessenger.of(context);
                                     messenger.showSnackBar(
                                       SnackBar(
                                         content: Text(l10n.bookDeleted(book.title)),
@@ -373,8 +497,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                   }
                                 } catch (e) {
                                   if (mounted) {
-                                    final l10n = AppLocalizations.of(context)!;
-                                    final messenger = ScaffoldMessenger.of(context);
                                     messenger.showSnackBar(
                                       SnackBar(
                                         content: Text(l10n.errorDeletingBook(e.toString())),
@@ -409,16 +531,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                                 top: Radius.circular(8),
                                               ),
                                             ),
-                                            child: book.coverImagePath != null
+                                            child: book.coverImagePath != null && book.coverImagePath!.isNotEmpty
                                                 ? ClipRRect(
                                                     borderRadius: const BorderRadius.vertical(
                                                       top: Radius.circular(8),
                                                     ),
-                                                    child: Image.network(
-                                                      book.coverImagePath!,
+                                                    child: Image.file(
+                                                      File(book.coverImagePath!),
                                                       fit: BoxFit.cover,
-                                                      errorBuilder: (context, error, stackTrace) =>
-                                                          _buildDefaultCover(book),
+                                                      errorBuilder: (context, error, stackTrace) {
+                                                        debugPrint('Error loading cover image: $error');
+                                                        return _buildDefaultCover(book);
+                                                      },
                                                     ),
                                                   )
                                                 : _buildDefaultCover(book),
@@ -428,6 +552,42 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                             Positioned.fill(
                                               child: _buildReadWatermark(),
                                             ),
+                                          // Burger menu button at top right
+                                          Positioned(
+                                            top: 8,
+                                            right: 8,
+                                            child: PopupMenuButton<String>(
+                                              icon: Container(
+                                                padding: const EdgeInsets.all(4),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.white.withValues(alpha: 0.9),
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: const Icon(
+                                                  Icons.more_vert,
+                                                  size: 18,
+                                                  color: Colors.black87,
+                                                ),
+                                              ),
+                                              onSelected: (value) {
+                                                if (value == 'delete') {
+                                                  _showDeleteConfirmationDialog(book);
+                                                }
+                                              },
+                                              itemBuilder: (context) => [
+                                                PopupMenuItem<String>(
+                                                  value: 'delete',
+                                                  child: Row(
+                                                    children: [
+                                                      const Icon(Icons.delete, size: 20),
+                                                      const SizedBox(width: 8),
+                                                      Text(l10n.delete),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
                                         ],
                                       ),
                                     ),
@@ -518,41 +678,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   Widget _buildProgressIndicator(Book book) {
     final progress = _bookProgress[book.id];
-    
-    // Only show progress bar if book has been read (progress exists)
+
     if (progress == null) {
       return const SizedBox.shrink();
     }
 
-    // If we're at chapter 0 and page 0, assume not started
-    if (progress.currentChapterIndex == 0 && progress.currentPageInChapter == 0) {
-      return const SizedBox.shrink();
-    }
+    double progressValue = progress.progress ??
+        _calculateLegacyProgress(book, progress);
+    progressValue = progressValue.clamp(0.0, 1.0);
 
-    // Calculate progress percentage
-    double progressValue = 0.0;
-    final totalChapters = _bookTotalChapters[book.id];
-    
-    if (totalChapters != null && totalChapters > 0) {
-      // Accurate progress based on actual chapter count
-      final chapterProgress = (progress.currentChapterIndex + 1) / totalChapters;
-      progressValue = chapterProgress.clamp(0.0, 1.0);
-      
-      // If we're at the last chapter, check if we're near completion
-      if (progress.currentChapterIndex >= totalChapters - 1) {
-        // Assume completion if at last chapter
-        progressValue = 1.0;
-      }
-    } else {
-      // Fallback: approximate progress - assume average book has ~20 chapters
-      const estimatedTotalChapters = 20.0;
-      final chapterProgress = (progress.currentChapterIndex + 1) / estimatedTotalChapters;
-      progressValue = chapterProgress.clamp(0.0, 1.0);
-      
-      // If progress is very high (>= 0.95), consider it complete
-      if (progressValue >= 0.95) {
-        progressValue = 1.0;
-      }
+    if (progressValue <= 0.0) {
+      return const SizedBox.shrink();
     }
 
     final progressPercentage = (progressValue * 100).toStringAsFixed(0);
@@ -594,34 +730,63 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  double _calculateLegacyProgress(Book book, ReadingProgress progress) {
+    final totalPages = progress.totalPages;
+    final chapterIndex = (progress.currentChapterIndex ?? 0).toDouble();
+    final pageInChapter = progress.currentPageInChapter ?? -1;
+    final additionalPages = pageInChapter >= 0 ? (pageInChapter + 1).toDouble() : 0.0;
+
+    if (totalPages != null && totalPages > 0) {
+      final totalChapters = _bookTotalChapters[book.id];
+      if (totalChapters != null && totalChapters > 0) {
+        final pagesPerChapter = totalPages / totalChapters;
+        final pagesRead = (chapterIndex * pagesPerChapter) + additionalPages;
+        return (pagesRead / totalPages).clamp(0.0, 1.0);
+      }
+      const estimatedChapters = 20.0;
+      final pagesPerChapter = totalPages / estimatedChapters;
+      final pagesRead = (chapterIndex * pagesPerChapter) + additionalPages;
+      return (pagesRead / totalPages).clamp(0.0, 1.0);
+    }
+
+    final totalChapters = _bookTotalChapters[book.id];
+    if (totalChapters != null && totalChapters > 0) {
+      final baseProgress = chapterIndex / totalChapters;
+      final fractional = pageInChapter >= 0
+          ? ((pageInChapter + 1).toDouble() / 100).clamp(0.0, 1.0) / totalChapters
+          : 0.0;
+      return (baseProgress + fractional).clamp(0.0, 1.0);
+    }
+
+    const estimatedTotalChapters = 20.0;
+    if (estimatedTotalChapters <= 0) {
+      return 0.0;
+    }
+    return (chapterIndex / estimatedTotalChapters).clamp(0.0, 1.0);
+  }
+
   bool _isBookCompleted(Book book) {
     final progress = _bookProgress[book.id];
     if (progress == null) return false;
-    
-    final totalChapters = _bookTotalChapters[book.id];
-    
-    if (totalChapters != null && totalChapters > 0) {
-      // Book is completed if we're at or past the last chapter
-      return progress.currentChapterIndex >= totalChapters - 1;
-    }
-    
-    // Fallback: assume completion if at high chapter index (heuristic)
-    const completionThreshold = 15;
-    return progress.currentChapterIndex >= completionThreshold;
+
+    final progressValue = (progress.progress ??
+            _calculateLegacyProgress(book, progress))
+        .clamp(0.0, 1.0);
+    return progressValue >= 0.99;
   }
 
   Widget _buildReadWatermark() {
     return Transform.rotate(
       angle: -0.5, // Rotate -28.6 degrees (roughly -0.5 radians)
       child: Container(
-        color: Colors.black.withOpacity(0.6),
+        color: Colors.black.withValues(alpha: 0.6),
         child: Center(
           child: Text(
             'READ',
             style: TextStyle(
               fontSize: 32,
               fontWeight: FontWeight.bold,
-              color: Colors.white.withOpacity(0.9),
+              color: Colors.white.withValues(alpha: 0.9),
               letterSpacing: 4,
             ),
           ),

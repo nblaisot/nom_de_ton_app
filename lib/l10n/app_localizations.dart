@@ -212,6 +212,12 @@ abstract class AppLocalizations {
   /// **'Chapters'**
   String get chapters;
 
+  /// Table of contents menu item
+  ///
+  /// In en, this message translates to:
+  /// **'Table of Contents'**
+  String get tableOfContents;
+
   /// Chapter label with number
   ///
   /// In en, this message translates to:
@@ -223,6 +229,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Go to Page'**
   String get goToPage;
+
+  /// Go to a percentage of the book
+  ///
+  /// In en, this message translates to:
+  /// **'Go to % progress'**
+  String get goToPercentage;
+
+  /// Prompt label for percentage input
+  ///
+  /// In en, this message translates to:
+  /// **'Enter progress percentage (0-100)'**
+  String get enterPercentage;
+
+  /// Error message when percentage input is invalid
+  ///
+  /// In en, this message translates to:
+  /// **'Please enter a value between 0 and 100'**
+  String get invalidPercentage;
 
   /// Summary menu item
   ///
@@ -271,6 +295,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'No chapters available'**
   String get noChaptersAvailable;
+
+  /// Menu item to reset summaries
+  ///
+  /// In en, this message translates to:
+  /// **'Reset summaries'**
+  String get resetSummaries;
+
+  /// Message displayed when summaries are reset
+  ///
+  /// In en, this message translates to:
+  /// **'Summaries reset'**
+  String get summariesReset;
+
+  /// Error message when reset fails
+  ///
+  /// In en, this message translates to:
+  /// **'Unable to reset summaries. Please try again.'**
+  String get resetSummariesError;
 
   /// Summary feature placeholder message
   ///
@@ -355,6 +397,360 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'This chapter has {count} pages'**
   String thisChapterHasPages_plural(Object count);
+
+  /// Settings screen title
+  ///
+  /// In en, this message translates to:
+  /// **'Settings'**
+  String get settings;
+
+  /// Summary provider section title
+  ///
+  /// In en, this message translates to:
+  /// **'Summary Provider'**
+  String get summaryProvider;
+
+  /// Summary provider section description
+  ///
+  /// In en, this message translates to:
+  /// **'Choose how summaries are generated'**
+  String get summaryProviderDescription;
+
+  /// Message shown when summary provider is not configured
+  ///
+  /// In en, this message translates to:
+  /// **'Configure a summary provider in Settings to generate summaries.'**
+  String get summaryProviderMissing;
+
+  /// Prompt settings section title
+  ///
+  /// In en, this message translates to:
+  /// **'Prompt Settings'**
+  String get promptSettings;
+
+  /// Description of prompt settings
+  ///
+  /// In en, this message translates to:
+  /// **'Customize the prompts used for summary generation. You can use placeholders in your prompts: text (for the text to summarize), bookTitle (for the book title), and chapterTitle (for the chapter title). Write them with curly braces in your prompts.'**
+  String get promptSettingsDescription;
+
+  /// Label for chunk summary prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Chunk Summary Prompt'**
+  String get chunkSummaryPrompt;
+
+  /// Label for French chunk summary prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Chunk Summary Prompt (French)'**
+  String get chunkSummaryPromptFr;
+
+  /// Label for English chunk summary prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Chunk Summary Prompt (English)'**
+  String get chunkSummaryPromptEn;
+
+  /// Label for character extraction prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Character Extraction Prompt'**
+  String get characterExtractionPrompt;
+
+  /// Label for French character extraction prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Character Extraction Prompt (French)'**
+  String get characterExtractionPromptFr;
+
+  /// Label for English character extraction prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Character Extraction Prompt (English)'**
+  String get characterExtractionPromptEn;
+
+  /// Label for batch summary prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Batch Summary Prompt'**
+  String get batchSummaryPrompt;
+
+  /// Label for French batch summary prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Batch Summary Prompt (French)'**
+  String get batchSummaryPromptFr;
+
+  /// Label for English batch summary prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Batch Summary Prompt (English)'**
+  String get batchSummaryPromptEn;
+
+  /// Label for narrative synthesis prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Narrative Synthesis Prompt'**
+  String get narrativeSynthesisPrompt;
+
+  /// Label for French narrative synthesis prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Narrative Synthesis Prompt (French)'**
+  String get narrativeSynthesisPromptFr;
+
+  /// Label for English narrative synthesis prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Narrative Synthesis Prompt (English)'**
+  String get narrativeSynthesisPromptEn;
+
+  /// Label for fallback summary prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Fallback Summary Prompt'**
+  String get fallbackSummaryPrompt;
+
+  /// Label for French fallback summary prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Fallback Summary Prompt (French)'**
+  String get fallbackSummaryPromptFr;
+
+  /// Label for English fallback summary prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Fallback Summary Prompt (English)'**
+  String get fallbackSummaryPromptEn;
+
+  /// Label for concise summary prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Concise Summary Prompt'**
+  String get conciseSummaryPrompt;
+
+  /// Label for French concise summary prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Concise Summary Prompt (French)'**
+  String get conciseSummaryPromptFr;
+
+  /// Label for English concise summary prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Concise Summary Prompt (English)'**
+  String get conciseSummaryPromptEn;
+
+  /// Button to reset prompts to default
+  ///
+  /// In en, this message translates to:
+  /// **'Reset to Default'**
+  String get resetPrompts;
+
+  /// Message when prompts are reset
+  ///
+  /// In en, this message translates to:
+  /// **'Prompts reset to default values'**
+  String get promptsReset;
+
+  /// Message when a prompt is saved
+  ///
+  /// In en, this message translates to:
+  /// **'Prompt saved'**
+  String get promptSaved;
+
+  /// OpenAI model option
+  ///
+  /// In en, this message translates to:
+  /// **'OpenAI (GPT)'**
+  String get openAIModel;
+
+  /// OpenAI model configured message
+  ///
+  /// In en, this message translates to:
+  /// **'Configured - Requires internet'**
+  String get openAIModelConfigured;
+
+  /// OpenAI model not configured message
+  ///
+  /// In en, this message translates to:
+  /// **'Not configured - API key required'**
+  String get openAIModelNotConfigured;
+
+  /// OpenAI settings section title
+  ///
+  /// In en, this message translates to:
+  /// **'OpenAI Settings'**
+  String get openAISettings;
+
+  /// OpenAI settings section description
+  ///
+  /// In en, this message translates to:
+  /// **'Enter your OpenAI API key to use GPT for summaries'**
+  String get openAISettingsDescription;
+
+  /// OpenAI API key label
+  ///
+  /// In en, this message translates to:
+  /// **'OpenAI API Key'**
+  String get openAIApiKey;
+
+  /// OpenAI API key input hint
+  ///
+  /// In en, this message translates to:
+  /// **'Enter your OpenAI API key'**
+  String get enterOpenAIApiKey;
+
+  /// Save API key button label
+  ///
+  /// In en, this message translates to:
+  /// **'Save API Key'**
+  String get saveApiKey;
+
+  /// API key required error message
+  ///
+  /// In en, this message translates to:
+  /// **'API key is required'**
+  String get apiKeyRequired;
+
+  /// Settings saved confirmation message
+  ///
+  /// In en, this message translates to:
+  /// **'Settings saved'**
+  String get settingsSaved;
+
+  /// Error saving settings message
+  ///
+  /// In en, this message translates to:
+  /// **'Error saving settings'**
+  String get errorSavingSettings;
+
+  /// Information section title
+  ///
+  /// In en, this message translates to:
+  /// **'Information'**
+  String get information;
+
+  /// Summary settings information text
+  ///
+  /// In en, this message translates to:
+  /// **'OpenAI and Mistral AI provide fast and accurate summaries but require an internet connection and API key. Configure your preferred provider and customize the prompts used for summary generation.'**
+  String get summarySettingsInfo;
+
+  /// Generating summary message
+  ///
+  /// In en, this message translates to:
+  /// **'Generating summary...'**
+  String get generatingSummary;
+
+  /// Error generating summary message
+  ///
+  /// In en, this message translates to:
+  /// **'Error generating summary: {error}'**
+  String errorGeneratingSummary(String error);
+
+  /// Summary dialog title
+  ///
+  /// In en, this message translates to:
+  /// **'Summary for {title}'**
+  String summaryForChapter(String title);
+
+  /// No summary available message
+  ///
+  /// In en, this message translates to:
+  /// **'No summary available'**
+  String get noSummaryAvailable;
+
+  /// Confirmation message when deleting a book
+  ///
+  /// In en, this message translates to:
+  /// **'This will delete the book from the library. Are you sure?'**
+  String get deleteBookConfirm;
+
+  /// Confirm button label
+  ///
+  /// In en, this message translates to:
+  /// **'Confirm'**
+  String get confirm;
+
+  /// Text size label in reader menu
+  ///
+  /// In en, this message translates to:
+  /// **'Text size'**
+  String get textSize;
+
+  /// Language setting label
+  ///
+  /// In en, this message translates to:
+  /// **'Language'**
+  String get language;
+
+  /// Language setting description
+  ///
+  /// In en, this message translates to:
+  /// **'Choose your preferred language. Changes require app restart.'**
+  String get languageDescription;
+
+  /// System default language option
+  ///
+  /// In en, this message translates to:
+  /// **'System Default'**
+  String get languageSystemDefault;
+
+  /// System default language description
+  ///
+  /// In en, this message translates to:
+  /// **'Use device language settings'**
+  String get languageSystemDefaultDescription;
+
+  /// Message shown when language is changed
+  ///
+  /// In en, this message translates to:
+  /// **'Language preference saved. Please restart the app for changes to take effect.'**
+  String get languageChangedRestart;
+
+  /// English language option
+  ///
+  /// In en, this message translates to:
+  /// **'English'**
+  String get languageEnglish;
+
+  /// French language option
+  ///
+  /// In en, this message translates to:
+  /// **'French'**
+  String get languageFrench;
+
+  /// Summary type option - from beginning
+  ///
+  /// In en, this message translates to:
+  /// **'Summary from the beginning'**
+  String get summaryFromBeginning;
+
+  /// Summary type option - since last time
+  ///
+  /// In en, this message translates to:
+  /// **'Summary since last time'**
+  String get summarySinceLastTime;
+
+  /// Message shown when horizontal padding is saved
+  ///
+  /// In en, this message translates to:
+  /// **'Horizontal padding saved. Changes will apply when you reopen a book.'**
+  String get horizontalPaddingSaved;
+
+  /// Message shown when vertical padding is saved
+  ///
+  /// In en, this message translates to:
+  /// **'Vertical padding saved. Changes will apply when you reopen a book.'**
+  String get verticalPaddingSaved;
+
+  /// Summary type option - characters
+  ///
+  /// In en, this message translates to:
+  /// **'Characters'**
+  String get summaryCharacters;
 }
 
 class _AppLocalizationsDelegate

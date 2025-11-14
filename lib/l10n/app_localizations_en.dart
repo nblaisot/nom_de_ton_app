@@ -76,12 +76,24 @@ class AppLocalizationsEn extends AppLocalizations {
   String get chapters => 'Chapters';
 
   @override
+  String get tableOfContents => 'Table of Contents';
+
+  @override
   String chapter(int number) {
     return 'Chapter $number';
   }
 
   @override
   String get goToPage => 'Go to Page';
+
+  @override
+  String get goToPercentage => 'Go to % progress';
+
+  @override
+  String get enterPercentage => 'Enter progress percentage (0-100)';
+
+  @override
+  String get invalidPercentage => 'Please enter a value between 0 and 100';
 
   @override
   String get summary => 'Summary';
@@ -110,6 +122,16 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get noChaptersAvailable => 'No chapters available';
+
+  @override
+  String get resetSummaries => 'Reset summaries';
+
+  @override
+  String get summariesReset => 'Summaries reset';
+
+  @override
+  String get resetSummariesError =>
+      'Unable to reset summaries. Please try again.';
 
   @override
   String get summaryFeatureComingSoon =>
@@ -167,4 +189,198 @@ class AppLocalizationsEn extends AppLocalizations {
   String thisChapterHasPages_plural(Object count) {
     return 'This chapter has $count pages';
   }
+
+  @override
+  String get settings => 'Settings';
+
+  @override
+  String get summaryProvider => 'Summary Provider';
+
+  @override
+  String get summaryProviderDescription => 'Choose how summaries are generated';
+
+  @override
+  String get summaryProviderMissing =>
+      'Configure a summary provider in Settings to generate summaries.';
+
+  @override
+  String get promptSettings => 'Prompt Settings';
+
+  @override
+  String get promptSettingsDescription =>
+      'Customize the prompts used for summary generation. You can use placeholders in your prompts: text (for the text to summarize), bookTitle (for the book title), and chapterTitle (for the chapter title). Write them with curly braces in your prompts.';
+
+  @override
+  String get chunkSummaryPrompt => 'Chunk Summary Prompt';
+
+  @override
+  String get chunkSummaryPromptFr => 'Chunk Summary Prompt (French)';
+
+  @override
+  String get chunkSummaryPromptEn => 'Chunk Summary Prompt (English)';
+
+  @override
+  String get characterExtractionPrompt => 'Character Extraction Prompt';
+
+  @override
+  String get characterExtractionPromptFr =>
+      'Character Extraction Prompt (French)';
+
+  @override
+  String get characterExtractionPromptEn =>
+      'Character Extraction Prompt (English)';
+
+  @override
+  String get batchSummaryPrompt => 'Batch Summary Prompt';
+
+  @override
+  String get batchSummaryPromptFr => 'Batch Summary Prompt (French)';
+
+  @override
+  String get batchSummaryPromptEn => 'Batch Summary Prompt (English)';
+
+  @override
+  String get narrativeSynthesisPrompt => 'Narrative Synthesis Prompt';
+
+  @override
+  String get narrativeSynthesisPromptFr =>
+      'Narrative Synthesis Prompt (French)';
+
+  @override
+  String get narrativeSynthesisPromptEn =>
+      'Narrative Synthesis Prompt (English)';
+
+  @override
+  String get fallbackSummaryPrompt => 'Fallback Summary Prompt';
+
+  @override
+  String get fallbackSummaryPromptFr => 'Fallback Summary Prompt (French)';
+
+  @override
+  String get fallbackSummaryPromptEn => 'Fallback Summary Prompt (English)';
+
+  @override
+  String get conciseSummaryPrompt => 'Concise Summary Prompt';
+
+  @override
+  String get conciseSummaryPromptFr => 'Concise Summary Prompt (French)';
+
+  @override
+  String get conciseSummaryPromptEn => 'Concise Summary Prompt (English)';
+
+  @override
+  String get resetPrompts => 'Reset to Default';
+
+  @override
+  String get promptsReset => 'Prompts reset to default values';
+
+  @override
+  String get promptSaved => 'Prompt saved';
+
+  @override
+  String get openAIModel => 'OpenAI (GPT)';
+
+  @override
+  String get openAIModelConfigured => 'Configured - Requires internet';
+
+  @override
+  String get openAIModelNotConfigured => 'Not configured - API key required';
+
+  @override
+  String get openAISettings => 'OpenAI Settings';
+
+  @override
+  String get openAISettingsDescription =>
+      'Enter your OpenAI API key to use GPT for summaries';
+
+  @override
+  String get openAIApiKey => 'OpenAI API Key';
+
+  @override
+  String get enterOpenAIApiKey => 'Enter your OpenAI API key';
+
+  @override
+  String get saveApiKey => 'Save API Key';
+
+  @override
+  String get apiKeyRequired => 'API key is required';
+
+  @override
+  String get settingsSaved => 'Settings saved';
+
+  @override
+  String get errorSavingSettings => 'Error saving settings';
+
+  @override
+  String get information => 'Information';
+
+  @override
+  String get summarySettingsInfo =>
+      'OpenAI and Mistral AI provide fast and accurate summaries but require an internet connection and API key. Configure your preferred provider and customize the prompts used for summary generation.';
+
+  @override
+  String get generatingSummary => 'Generating summary...';
+
+  @override
+  String errorGeneratingSummary(String error) {
+    return 'Error generating summary: $error';
+  }
+
+  @override
+  String summaryForChapter(String title) {
+    return 'Summary for $title';
+  }
+
+  @override
+  String get noSummaryAvailable => 'No summary available';
+
+  @override
+  String get deleteBookConfirm =>
+      'This will delete the book from the library. Are you sure?';
+
+  @override
+  String get confirm => 'Confirm';
+
+  @override
+  String get textSize => 'Text size';
+
+  @override
+  String get language => 'Language';
+
+  @override
+  String get languageDescription =>
+      'Choose your preferred language. Changes require app restart.';
+
+  @override
+  String get languageSystemDefault => 'System Default';
+
+  @override
+  String get languageSystemDefaultDescription => 'Use device language settings';
+
+  @override
+  String get languageChangedRestart =>
+      'Language preference saved. Please restart the app for changes to take effect.';
+
+  @override
+  String get languageEnglish => 'English';
+
+  @override
+  String get languageFrench => 'French';
+
+  @override
+  String get summaryFromBeginning => 'Summary from the beginning';
+
+  @override
+  String get summarySinceLastTime => 'Summary since last time';
+
+  @override
+  String get horizontalPaddingSaved =>
+      'Horizontal padding saved. Changes will apply when you reopen a book.';
+
+  @override
+  String get verticalPaddingSaved =>
+      'Vertical padding saved. Changes will apply when you reopen a book.';
+
+  @override
+  String get summaryCharacters => 'Characters';
 }

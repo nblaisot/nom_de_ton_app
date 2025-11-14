@@ -1,46 +1,120 @@
-import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
-import 'package:memoreader/l10n/app_localizations.dart';
+import 'dart:async';
+import 'dart:math' as math;
+import 'dart:typed_data';
+
 import 'package:epubx/epubx.dart';
-import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
+import 'package:flutter/material.dart' as material;
+import 'package:flutter/material.dart';
+import 'package:html/dom.dart' as dom;
+import 'package:html/parser.dart' as html_parser;
+import 'package:image/image.dart' as img show decodeImage;
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../models/book.dart';
-import '../models/chapter.dart';
 import '../models/reading_progress.dart';
 import '../services/book_service.dart';
+import '../services/enhanced_summary_service.dart';
+import '../services/summary_config_service.dart';
+import '../services/settings_service.dart';
+import 'reader/document_model.dart';
+import 'reader/line_metrics_pagination_engine.dart';
+import 'reader/tap_zones.dart';
+import 'settings_screen.dart';
+import 'summary_screen.dart';
 
 class ReaderScreen extends StatefulWidget {
-  final Book book;
-
   const ReaderScreen({super.key, required this.book});
+
+  final Book book;
 
   @override
   State<ReaderScreen> createState() => _ReaderScreenState();
 }
 
-class _ReaderScreenState extends State<ReaderScreen> {
+class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver {
+  static const double _defaultHorizontalPadding = 30.0; // Default horizontal padding
+  static const double _defaultVerticalPadding = 50.0; // Default vertical padding
+  static const double _paragraphSpacing = 18.0;
+  static const double _headingSpacing = 28.0;
+
   final BookService _bookService = BookService();
+  final SettingsService _settingsService = SettingsService();
+  EnhancedSummaryService? _summaryService;
+  final PageController _pageController = PageController(initialPage: 1);
+  
+  double _horizontalPadding = _defaultHorizontalPadding; // Will be loaded from settings
+  double _verticalPadding = _defaultVerticalPadding; // Will be loaded from settings
+
+  Size? _lastActualSize;
+
   EpubBook? _epubBook;
-  List<Chapter> _chapters = [];
-  int _currentChapterIndex = 0;
-  int _currentPageInChapter = 0;
+  List<DocumentBlock> _docBlocks = [];
+  List<_ChapterEntry> _chapterEntries = [];
+
+  LineMetricsPaginationEngine? _engine;
+  
+  int _currentPageIndex = 0;
+  int _totalPages = 0;
+  double _progress = 0;
+
   bool _isLoading = true;
-  bool _showMenu = false;
-  List<String> _pages = []; // Pages for current chapter
-  Map<int, int> _chapterPageCounts = {}; // Track page counts per chapter
   String? _errorMessage;
-  final PageController _pageController = PageController();
-  bool _isProcessingPageChange = false;
+
+  bool _showProgressBar = false;
+  double _fontSize = 18.0;
+
+  ReadingProgress? _savedProgress;
+  Timer? _progressDebounce;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _initializeSummaryService();
+    _loadVerticalPadding();
     _loadBook();
+  }
+
+  Future<void> _loadVerticalPadding() async {
+    final horizontal = await _settingsService.getHorizontalPadding();
+    final vertical = await _settingsService.getVerticalPadding();
+    if (mounted) {
+      setState(() {
+        _horizontalPadding = horizontal;
+        _verticalPadding = vertical;
+      });
+    }
+  }
+
+  Future<void> _initializeSummaryService() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final configService = SummaryConfigService(prefs);
+      final baseService = await configService.getSummaryService();
+      if (baseService != null) {
+        setState(() {
+          _summaryService = EnhancedSummaryService(baseService, prefs);
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to initialize summary service: $e');
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pageController.dispose();
+    _progressDebounce?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    if (!_isLoading && mounted) {
+      _scheduleRepagination(retainCurrentPage: true);
+    }
   }
 
   Future<void> _loadBook() async {
@@ -50,576 +124,295 @@ class _ReaderScreenState extends State<ReaderScreen> {
     });
 
     try {
-      // Validate file path
-      if (widget.book.filePath.isEmpty) {
-        throw Exception('Book file path is empty');
-      }
-
-      // Load EPUB
-      _epubBook = await _bookService.loadEpubBook(widget.book.filePath);
-      
-      if (_epubBook == null) {
-        throw Exception('Failed to load EPUB file');
-      }
-      
-      // Parse chapters
-      _chapters = _parseChapters(_epubBook!);
-      
-      if (_chapters.isEmpty) {
-        throw Exception('No chapters found in this book');
-      }
-      
-      // Load reading progress
+      final epub = await _bookService.loadEpubBook(widget.book.filePath);
       final progress = await _bookService.getReadingProgress(widget.book.id);
-      if (progress != null) {
-        // Validate progress
-        if (progress.currentChapterIndex >= 0 && 
-            progress.currentChapterIndex < _chapters.length) {
-          _currentChapterIndex = progress.currentChapterIndex;
-          _currentPageInChapter = progress.currentPageInChapter;
-        }
-      }
-      
-      // Load current chapter pages
-      await _loadCurrentChapterPages();
-      
+      final extraction = await _extractDocument(epub);
+
       setState(() {
+        _epubBook = epub;
+        _docBlocks = extraction.blocks;
+        _chapterEntries = extraction.chapters;
+        _savedProgress = progress;
         _isLoading = false;
       });
+
+      final initialCharIndex = progress?.currentWordIndex ?? 0; // Reusing field for character index
+      _scheduleRepagination(initialCharIndex: initialCharIndex);
     } catch (e) {
       setState(() {
+        _isLoading = false;
         _errorMessage = e.toString();
-        _isLoading = false;
       });
-      if (mounted) {
-        final l10n = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(l10n.errorLoadingBook(e.toString())),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 4),
-            action: SnackBarAction(
-              label: l10n.retry,
-              textColor: Colors.white,
-              onPressed: _loadBook,
-            ),
-          ),
-        );
-      }
     }
   }
 
-  List<Chapter> _parseChapters(EpubBook epubBook) {
-    final chapters = <Chapter>[];
-    
-    try {
-      final epubChapters = epubBook.Chapters;
-      if (epubChapters == null || epubChapters.isEmpty) {
-        return chapters;
+  void _scheduleRepagination({int? initialCharIndex, bool retainCurrentPage = false, Size? actualSize}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _docBlocks.isEmpty) return;
+      int targetCharIndex;
+      if (retainCurrentPage) {
+        // Get current page's start char index
+        final currentPage = _engine?.getPage(_currentPageIndex);
+        targetCharIndex = currentPage?.startCharIndex ?? 0;
+      } else if (initialCharIndex != null) {
+        targetCharIndex = initialCharIndex;
+      } else {
+        targetCharIndex = _savedProgress?.currentWordIndex ?? 0;
       }
-      
-      for (int i = 0; i < epubChapters.length; i++) {
-        try {
-          final epubChapter = epubChapters[i];
-          final title = epubChapter.Title?.isNotEmpty == true
-              ? epubChapter.Title!
-              : 'Chapter ${i + 1}';
-          final htmlContent = epubChapter.HtmlContent ?? '';
-          
-          if (htmlContent.isNotEmpty) {
-            chapters.add(Chapter(
-              index: i,
-              title: title,
-              htmlContent: htmlContent,
-            ));
-          }
-        } catch (e) {
-          // Skip corrupted chapters
-          debugPrint('Error parsing chapter $i: $e');
-        }
-      }
-    } catch (e) {
-      debugPrint('Error parsing chapters: $e');
-    }
-    
-    return chapters.isEmpty ? [] : chapters;
+      _rebuildPagination(targetCharIndex, actualSize: actualSize);
+    });
   }
 
-  Future<void> _loadCurrentChapterPages() async {
-    if (_chapters.isEmpty) {
+  void _rebuildPagination(int startCharIndex, {Size? actualSize}) {
+    if (!mounted || _docBlocks.isEmpty) return;
+
+    Size? sizeForMetrics = actualSize ?? _lastActualSize;
+    sizeForMetrics ??= MediaQuery.of(context).size;
+    final baseMetrics = _computePageMetrics(context, sizeForMetrics);
+    final metrics = _adjustForUserPadding(baseMetrics);
+    
+    final engine = LineMetricsPaginationEngine(
+      blocks: _docBlocks,
+      baseTextStyle: metrics.baseTextStyle,
+      maxWidth: metrics.maxWidth,
+      maxHeight: metrics.maxHeight,
+    );
+
+    final totalPages = engine.totalPages;
+    if (totalPages == 0) {
       setState(() {
-        _pages = [];
-        _currentPageInChapter = 0;
+        _engine = engine;
+        _totalPages = 0;
+        _currentPageIndex = 0;
+        _progress = 0;
       });
       return;
     }
-    
-    try {
-      if (_currentChapterIndex < 0 || _currentChapterIndex >= _chapters.length) {
-        _currentChapterIndex = 0;
+
+    // Find the page that contains the target character index
+    final totalChars = engine.totalCharacters;
+    final clampedStart = totalChars > 0 ? startCharIndex.clamp(0, totalChars - 1) : 0;
+    int targetPageIndex = engine.findPageByCharacterIndex(clampedStart);
+
+    setState(() {
+      _engine = engine;
+      _totalPages = totalPages;
+      _currentPageIndex = targetPageIndex;
+      _progress = totalPages > 0 ? (targetPageIndex + 1) / totalPages : 0;
+      _showProgressBar = false;
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_pageController.hasClients) {
+        _pageController.jumpToPage(1);
       }
-      
-      final chapter = _chapters[_currentChapterIndex];
-      // Improved pagination based on screen size
-      final pages = await _splitIntoPages(chapter.htmlContent);
-      
-      setState(() {
-        _pages = pages.isNotEmpty ? pages : [chapter.htmlContent];
-        _chapterPageCounts[_currentChapterIndex] = _pages.length;
-        if (_currentPageInChapter >= _pages.length) {
-          _currentPageInChapter = _pages.length - 1;
+    });
+
+    _scheduleProgressSave();
+  }
+
+
+  _PageMetrics _computePageMetrics(BuildContext context, Size? actualSize) {
+    final mediaQuery = MediaQuery.of(context);
+    // Use actualSize if provided (from LayoutBuilder), otherwise fall back to MediaQuery
+    final size = actualSize ?? mediaQuery.size;
+    // Use full screen width minus only system padding and margins
+    final systemHorizontalPadding =
+        mediaQuery.padding.left + mediaQuery.padding.right;
+    // Calculate available height: screen height minus only system padding
+    final systemVerticalPadding =
+        mediaQuery.padding.top + mediaQuery.padding.bottom;
+    final maxWidth = math.max(120.0, size.width - systemHorizontalPadding);
+    final maxHeight = math.max(160.0, size.height - systemVerticalPadding);
+
+    final theme = Theme.of(context);
+    final baseColor = theme.colorScheme.onSurface;
+    final baseStyle = theme.textTheme.bodyMedium?.copyWith(
+          fontSize: _fontSize,
+          height: 1.6,
+          color: baseColor,
+        ) ??
+        TextStyle(
+          fontSize: _fontSize,
+          height: 1.6,
+          color: baseColor,
+        );
+
+    return _PageMetrics(
+      maxWidth: maxWidth,
+      maxHeight: maxHeight,
+      baseTextStyle: baseStyle,
+    );
+  }
+
+_PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
+    final adjustedWidth =
+        math.max(120.0, metrics.maxWidth - _horizontalPadding * 2);
+    final adjustedHeight =
+        math.max(160.0, metrics.maxHeight - _verticalPadding * 2);
+    return _PageMetrics(
+      maxWidth: adjustedWidth,
+      maxHeight: adjustedHeight,
+      baseTextStyle: metrics.baseTextStyle,
+    );
+  }
+
+  void _scheduleProgressSave() {
+    _progressDebounce?.cancel();
+    _progressDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (!mounted || _engine == null) return;
+      final page = _engine!.getPage(_currentPageIndex);
+      if (page == null) return;
+      _saveProgress(page);
+    });
+  }
+
+  void _handleTapDown(TapDownDetails details) {
+    final size = MediaQuery.of(context).size;
+    final action = determineTapAction(details.globalPosition, size);
+
+    switch (action) {
+      case ReaderTapAction.showMenu:
+        _openReadingMenu();
+        break;
+      case ReaderTapAction.showProgress:
+        setState(() {
+          _showProgressBar = !_showProgressBar;
+        });
+        break;
+      case ReaderTapAction.nextPage:
+        if (_currentPageIndex < _totalPages - 1 && _pageController.hasClients) {
+          _pageController.animateToPage(
+            2,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeInOut,
+          );
         }
-        if (_currentPageInChapter < 0) {
-          _currentPageInChapter = 0;
+        break;
+      case ReaderTapAction.previousPage:
+        if (_currentPageIndex > 0 && _pageController.hasClients) {
+          _pageController.animateToPage(
+            0,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeInOut,
+          );
         }
-      });
-      
-      await _saveProgress();
-    } catch (e) {
-      debugPrint('Error loading pages: $e');
-      setState(() {
-        _pages = _chapters[_currentChapterIndex].htmlContent.isNotEmpty
-            ? [_chapters[_currentChapterIndex].htmlContent]
-            : ['<p>Error loading chapter content.</p>'];
-        _chapterPageCounts[_currentChapterIndex] = _pages.length;
-      });
+        break;
+      case ReaderTapAction.dismissOverlays:
+        if (_showProgressBar) {
+          setState(() {
+            _showProgressBar = false;
+          });
+        }
+        break;
     }
   }
 
-  double _calculateOverallProgress() {
-    if (_chapters.isEmpty || _pages.isEmpty) return 0.0;
-    
-    // Calculate progress based on chapters and pages
-    // Approximate: each chapter contributes equally, and within a chapter progress is based on pages
-    final chaptersRead = _currentChapterIndex.toDouble();
-    final currentChapterProgress = _pages.isNotEmpty
-        ? (_currentPageInChapter + 1) / _pages.length
-        : 0.0;
-    
-    final totalChapters = _chapters.length.toDouble();
-    final overallProgress = (chaptersRead + currentChapterProgress) / totalChapters;
-    
-    return overallProgress.clamp(0.0, 1.0);
-  }
-
-  Future<List<String>> _splitIntoPages(String htmlContent) async {
-    if (htmlContent.isEmpty) {
-      return ['<p>No content available.</p>'];
-    }
-
-    try {
-      // Get screen dimensions for better pagination
-      final mediaQuery = MediaQuery.of(context);
-      final screenHeight = mediaQuery.size.height - 
-                          mediaQuery.padding.top - 
-                          mediaQuery.padding.bottom - 
-                          200; // Account for padding and footer
-      final screenWidth = mediaQuery.size.width - 32; // Account for padding
-
-      // Estimate characters per page based on screen size
-      // Rough estimate: ~50 characters per line, ~30 lines per page
-      final estimatedCharsPerPage = ((screenWidth / 10) * (screenHeight / 20)).round();
-      final charsPerPage = estimatedCharsPerPage > 500 ? estimatedCharsPerPage : 1500;
-
-      // Split HTML by paragraphs while preserving structure
-      final pages = <String>[];
-      String currentPage = '';
-      
-      // Split by paragraphs
-      final paragraphRegex = RegExp(r'<p[^>]*>.*?</p>', dotAll: true);
-      final divRegex = RegExp(r'<div[^>]*>.*?</div>', dotAll: true);
-      
-      // Extract all content blocks
-      final allMatches = <String>[];
-      
-      // Find all paragraphs
-      paragraphRegex.allMatches(htmlContent).forEach((match) {
-        allMatches.add(match.group(0)!);
-      });
-      
-      // Find all divs that aren't already captured
-      divRegex.allMatches(htmlContent).forEach((match) {
-        final divContent = match.group(0)!;
-        if (!allMatches.any((p) => p.contains(divContent))) {
-          allMatches.add(divContent);
-        }
-      });
-      
-      // If no structured content, split by approximate page size
-      if (allMatches.isEmpty) {
-        for (int i = 0; i < htmlContent.length; i += charsPerPage) {
-          final end = (i + charsPerPage < htmlContent.length) 
-              ? i + charsPerPage 
-              : htmlContent.length;
-          pages.add(htmlContent.substring(i, end));
-        }
-        return pages.isEmpty ? [htmlContent] : pages;
-      }
-      
-      // Build pages from content blocks
-      for (final block in allMatches) {
-        final blockLength = block.length;
-        
-        if (currentPage.length + blockLength > charsPerPage && currentPage.isNotEmpty) {
-          pages.add(currentPage);
-          currentPage = block;
-        } else {
-          currentPage += block;
-        }
-      }
-      
-      if (currentPage.isNotEmpty) {
-        pages.add(currentPage);
-      }
-      
-      return pages.isEmpty ? [htmlContent] : pages;
-    } catch (e) {
-      debugPrint('Error splitting pages: $e');
-      return [htmlContent];
-    }
-  }
-
-  Future<void> _saveProgress() async {
+  Future<void> _saveProgress(PageContent page) async {
     try {
       final progress = ReadingProgress(
         bookId: widget.book.id,
-        currentChapterIndex: _currentChapterIndex,
-        currentPageInChapter: _currentPageInChapter,
+        currentChapterIndex: page.chapterIndex,
+        currentPageInChapter: null,
+        currentWordIndex: page.startCharIndex, // Using character index for progress
+        progress: _progress,
         lastRead: DateTime.now(),
       );
       await _bookService.saveReadingProgress(progress);
-    } catch (e) {
-      debugPrint('Error saving progress: $e');
-      // Don't show error to user - progress saving is best effort
+    } catch (_) {
+      // Saving progress is best-effort; ignore failures.
     }
   }
 
-  void _nextPage() {
-    if (_isProcessingPageChange) return;
-    
+  void _changeFontSize(double value) {
     setState(() {
-      _isProcessingPageChange = true;
+      _fontSize = value;
     });
-
-    try {
-      if (_currentPageInChapter < _pages.length - 1) {
-        setState(() {
-          _currentPageInChapter++;
-        });
-        _saveProgress();
-      } else if (_currentChapterIndex < _chapters.length - 1) {
-        _goToChapter(_currentChapterIndex + 1);
-      } else {
-        // Last page of last chapter
-        if (mounted) {
-          final l10n = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(l10n.endOfBookReached),
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      debugPrint('Error navigating to next page: $e');
-    } finally {
-      setState(() {
-        _isProcessingPageChange = false;
-      });
-    }
+    _scheduleRepagination(retainCurrentPage: true);
   }
 
-  void _previousPage() {
-    if (_isProcessingPageChange) return;
-    
-    setState(() {
-      _isProcessingPageChange = true;
+  void _handlePageChanged(int pageIndex) {
+    if (pageIndex == 1) return;
+
+    if (pageIndex == 2 && _currentPageIndex < _totalPages - 1) {
+      // Next page
+      setState(() {
+        _currentPageIndex++;
+        _progress = _totalPages > 0 ? (_currentPageIndex + 1) / _totalPages : 0;
+        _showProgressBar = false;
+      });
+      _scheduleProgressSave();
+    } else if (pageIndex == 0 && _currentPageIndex > 0) {
+      // Previous page
+      setState(() {
+        _currentPageIndex--;
+        _progress = _totalPages > 0 ? (_currentPageIndex + 1) / _totalPages : 0;
+        _showProgressBar = false;
+      });
+      _scheduleProgressSave();
+    }
+
+    // Reset controller to keep current page in the middle.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_pageController.hasClients) {
+        _pageController.jumpToPage(1);
+      }
     });
-
-    try {
-      if (_currentPageInChapter > 0) {
-        setState(() {
-          _currentPageInChapter--;
-        });
-        _saveProgress();
-      } else if (_currentChapterIndex > 0) {
-        _goToChapter(_currentChapterIndex - 1);
-        setState(() {
-          _currentPageInChapter = _pages.length - 1;
-        });
-        _saveProgress();
-      } else {
-        // First page of first chapter
-        if (mounted) {
-          final l10n = AppLocalizations.of(context)!;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(l10n.beginningOfBook),
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      debugPrint('Error navigating to previous page: $e');
-    } finally {
-      setState(() {
-        _isProcessingPageChange = false;
-      });
-    }
-  }
-
-  Future<void> _goToChapter(int chapterIndex) async {
-    if (chapterIndex < 0 || chapterIndex >= _chapters.length) {
-      if (mounted) {
-        final l10n = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(l10n.invalidChapterIndex),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-      return;
-    }
-
-    try {
-      setState(() {
-        _currentChapterIndex = chapterIndex;
-        _currentPageInChapter = 0;
-        _isLoading = true;
-      });
-      
-      await _loadCurrentChapterPages();
-      
-      setState(() {
-        _isLoading = false;
-        _showMenu = false;
-      });
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-      });
-      if (mounted) {
-        final l10n = AppLocalizations.of(context)!;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(l10n.errorLoadingChapter(e.toString())),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  void _toggleMenu() {
-    setState(() {
-      _showMenu = !_showMenu;
-    });
-  }
-
-  void _showChapterList() {
-    final l10n = AppLocalizations.of(context)!;
-    if (_chapters.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(l10n.noChaptersAvailable)),
-      );
-      return;
-    }
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).scaffoldBackgroundColor,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 16),
-              decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            Text(
-              l10n.chapters,
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Flexible(
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: _chapters.length,
-                itemBuilder: (context, index) {
-                  final chapter = _chapters[index];
-                  final isCurrent = index == _currentChapterIndex;
-                  return ListTile(
-                    title: Text(
-                      chapter.title,
-                      style: TextStyle(
-                        fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                      ),
-                    ),
-                    subtitle: Text(l10n.chapter(index + 1)),
-                    selected: isCurrent,
-                    selectedTileColor: Theme.of(context).colorScheme.primaryContainer,
-                    leading: isCurrent
-                        ? Icon(Icons.bookmark, color: Theme.of(context).colorScheme.primary)
-                        : null,
-                    onTap: () {
-                      Navigator.pop(context);
-                      _goToChapter(index);
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showGoToPageDialog() {
-    final l10n = AppLocalizations.of(context)!;
-    if (_pages.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(l10n.noPagesAvailable)),
-      );
-      return;
-    }
-
-    final controller = TextEditingController(
-      text: (_currentPageInChapter + 1).toString(),
-    );
-    
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(l10n.goToPage),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.number,
-          decoration: InputDecoration(
-            hintText: l10n.enterPageNumber(_pages.length),
-            labelText: l10n.page,
-            helperText: _pages.length == 1 
-                ? l10n.thisChapterHasPages(_pages.length)
-                : l10n.thisChapterHasPages_plural(_pages.length),
-          ),
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(l10n.cancel),
-          ),
-          TextButton(
-            onPressed: () {
-              final pageNum = int.tryParse(controller.text);
-              if (pageNum != null && pageNum >= 1 && pageNum <= _pages.length) {
-                setState(() {
-                  _currentPageInChapter = pageNum - 1;
-                });
-                _saveProgress();
-                Navigator.pop(context);
-                setState(() {
-                  _showMenu = false;
-                });
-              } else {
-                final l10n = AppLocalizations.of(context)!;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(l10n.invalidPageNumber(_pages.length)),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
-            },
-            child: Text(l10n.go),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showSummaryDialog() {
-    final l10n = AppLocalizations.of(context)!;
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(l10n.summary),
-        content: Text(l10n.summaryFeatureComingSoon),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(l10n.ok),
-          ),
-        ],
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
-    if (_isLoading && _errorMessage == null) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Use LayoutBuilder to get actual widget size, especially important for foldable devices
+        final actualSize = Size(constraints.maxWidth, constraints.maxHeight);
+        _lastActualSize = actualSize;
+    final baseMetrics = _computePageMetrics(context, actualSize);
+    final metrics = _adjustForUserPadding(baseMetrics);
+        
+        // Trigger repagination if size changed significantly
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || _docBlocks.isEmpty) return;
+          // Only repaginate if size changed significantly (more than 10 pixels difference)
+          final currentMetrics = metrics;
+          if (_engine == null ||
+              !_engine!.matches(
+                blocks: _docBlocks,
+                baseStyle: currentMetrics.baseTextStyle,
+                maxWidth: currentMetrics.maxWidth,
+                maxHeight: currentMetrics.maxHeight,
+              )) {
+            _scheduleRepagination(retainCurrentPage: true, actualSize: actualSize);
+          }
+        });
+        
+        return _buildReaderContent(context, actualSize, metrics);
+      },
+    );
+  }
+
+  Widget _buildReaderContent(BuildContext context, Size actualSize, _PageMetrics metrics) {
+    final theme = Theme.of(context);
+
+    if (_isLoading) {
       return Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const CircularProgressIndicator(),
-              const SizedBox(height: 16),
-              Text(
-                l10n.loadingBook(widget.book.title),
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ],
-          ),
-        ),
+        body: const Center(child: CircularProgressIndicator()),
       );
     }
 
     if (_errorMessage != null) {
       return Scaffold(
-        appBar: AppBar(
-          title: Text(widget.book.title),
-        ),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24.0),
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.error_outline, size: 64, color: Colors.red[300]),
+                Icon(Icons.error_outline, size: 64, color: theme.colorScheme.error),
                 const SizedBox(height: 16),
-                Text(
-                  l10n.errorLoadingBookTitle,
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _errorMessage!,
-                  style: TextStyle(color: Colors.red[600]),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 24),
-                ElevatedButton.icon(
-                  onPressed: _loadBook,
-                  icon: const Icon(Icons.refresh),
-                  label: Text(l10n.retry),
-                ),
+                Text(_errorMessage!, textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                ElevatedButton(onPressed: _loadBook, child: const Text('Réessayer')),
               ],
             ),
           ),
@@ -627,225 +420,671 @@ class _ReaderScreenState extends State<ReaderScreen> {
       );
     }
 
-    if (_chapters.isEmpty || _pages.isEmpty) {
-      return Scaffold(
-        appBar: AppBar(title: Text(widget.book.title)),
-        body: Center(
-          child: Text(l10n.noContentAvailable),
-        ),
-      );
-    }
+    // Build three pages: previous, current, and next
+    final previousPage = _currentPageIndex > 0 && _engine != null
+        ? _engine!.getPage(_currentPageIndex - 1)
+        : null;
+    final currentPage = _engine?.getPage(_currentPageIndex);
+    final nextPage = _currentPageIndex < _totalPages - 1 && _engine != null
+        ? _engine!.getPage(_currentPageIndex + 1)
+        : null;
+
+    final pages = <Widget>[
+      _buildPageContent(previousPage, metrics),
+      _buildPageContent(currentPage, metrics),
+      _buildPageContent(nextPage, metrics),
+    ];
 
     return Scaffold(
       body: Stack(
         children: [
-          // Reading area
-          GestureDetector(
-            onTapDown: (details) {
-              final screenWidth = MediaQuery.of(context).size.width;
-              final tapX = details.globalPosition.dx;
-              final tapY = details.globalPosition.dy;
-              
-              // Top area for menu (first 80px)
-              if (tapY < 80) {
-                _toggleMenu();
-                return;
-              }
-              
-              // Left half for previous page
-              if (tapX < screenWidth / 2) {
-                _previousPage();
-              } else {
-                // Right half for next page
-                _nextPage();
-              }
-            },
-            child: Container(
-              color: Theme.of(context).scaffoldBackgroundColor,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: SafeArea(
+          PageView.builder(
+            controller: _pageController,
+            itemCount: pages.length,
+            onPageChanged: _handlePageChanged,
+            itemBuilder: (context, index) => pages[index],
+          ),
+          // GestureDetector that covers the entire screen to catch taps
+          // Use onTapDown for immediate response (not onTapUp which waits for tap completion)
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTapDown: (details) {
+                final size = MediaQuery.of(context).size;
+                final action = determineTapAction(details.globalPosition, size);
+                
+                switch (action) {
+                  case ReaderTapAction.showMenu:
+                    _openReadingMenu();
+                    break;
+                  case ReaderTapAction.showProgress:
+                    setState(() {
+                      _showProgressBar = !_showProgressBar;
+                    });
+                    break;
+                  case ReaderTapAction.nextPage:
+                    if (_currentPageIndex < _totalPages - 1) {
+                      setState(() {
+                        _currentPageIndex++;
+                        _progress = _totalPages > 0 ? (_currentPageIndex + 1) / _totalPages : 0;
+                        _showProgressBar = false;
+                      });
+                      _scheduleProgressSave();
+                      // Reset PageView to middle page after state update
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (_pageController.hasClients) {
+                          _pageController.jumpToPage(1);
+                        }
+                      });
+                    }
+                    break;
+                  case ReaderTapAction.previousPage:
+                    if (_currentPageIndex > 0) {
+                      setState(() {
+                        _currentPageIndex--;
+                        _progress = _totalPages > 0 ? (_currentPageIndex + 1) / _totalPages : 0;
+                        _showProgressBar = false;
+                      });
+                      _scheduleProgressSave();
+                      // Reset PageView to middle page after state update
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (_pageController.hasClients) {
+                          _pageController.jumpToPage(1);
+                        }
+                      });
+                    }
+                    break;
+                  case ReaderTapAction.dismissOverlays:
+                    if (_showProgressBar) {
+                      setState(() {
+                        _showProgressBar = false;
+                      });
+                    }
+                    break;
+                }
+              },
+              child: Container(color: Colors.transparent),
+            ),
+          ),
+          if (_showProgressBar)
+            Positioned(
+              bottom: 24,
+              left: 24,
+              right: 24,
+              child: _buildProgressIndicator(theme),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProgressIndicator(ThemeData theme) {
+    final displayProgress = (_progress * 100).clamp(0, 100).toStringAsFixed(1);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface.withOpacity(0.92),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 12)],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _currentChapterTitle ?? widget.book.title,
+                  style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                LinearProgressIndicator(
+                  value: _progress,
+                  backgroundColor: theme.colorScheme.surfaceVariant,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+          Text('$displayProgress %'),
+        ],
+      ),
+    );
+  }
+
+  String? get _currentChapterTitle {
+    if (_engine == null) return null;
+    final page = _engine!.getPage(_currentPageIndex);
+    final chapterIndex = page?.chapterIndex;
+    if (chapterIndex == null) return null;
+    if (chapterIndex < 0 || chapterIndex >= _chapterEntries.length) return null;
+    return _chapterEntries[chapterIndex].title;
+  }
+
+  Widget _buildPageContent(PageContent? page, _PageMetrics metrics) {
+    if (page == null) {
+      // Return empty container during loading instead of showing message
+      return Container();
+    }
+
+    // Center the page content with proper constraints
+    return Center(
+      child: _PageContentView(
+        content: page,
+        maxWidth: metrics.maxWidth,
+        maxHeight: metrics.maxHeight,
+      ),
+    );
+  }
+
+  void _openReadingMenu() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useRootNavigator: true,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
                 child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Header with book info
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      height: _showMenu ? 60 : 0,
-                      child: _showMenu
-                          ? Container(
-                              color: Theme.of(context).colorScheme.surface,
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      widget.book.title,
-                                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.close),
-                                    onPressed: _toggleMenu,
-                                  ),
-                                ],
-                              ),
-                            )
-                          : const SizedBox.shrink(),
+                    const Text(
+                      'Options de lecture',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
                     ),
-                    // Page content
-                    Expanded(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        child: HtmlWidget(
-                          _pages[_currentPageInChapter],
-                          textStyle: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                            fontSize: 18,
-                            height: 1.6,
-                          ),
-                        ),
-                      ),
+                    const SizedBox(height: 20),
+                    // Font size slider
+                    Text('Taille du texte : ${_fontSize.toStringAsFixed(0)} pt'),
+                    Slider(
+                      min: 14,
+                      max: 30,
+                      divisions: 16,
+                      value: _fontSize,
+                      label: '${_fontSize.toStringAsFixed(0)} pt',
+                      onChanged: (value) {
+                        setState(() => _fontSize = value);
+                        _changeFontSize(value);
+                      },
                     ),
-                    // Footer with progress bar and page info
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                      decoration: BoxDecoration(
-                        border: Border(
-                          top: BorderSide(
-                            color: Colors.grey[300]!,
-                            width: 1,
-                          ),
-                        ),
+                    const SizedBox(height: 20),
+                    // Navigation to chapter
+                    if (_chapterEntries.isNotEmpty)
+                      ListTile(
+                        leading: const Icon(Icons.list),
+                        title: const Text('Aller au chapitre'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showChapterSelector();
+                        },
                       ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Progress bar
-                          Row(
-                            children: [
-                              Expanded(
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(2),
-                                  child: LinearProgressIndicator(
-                                    value: _calculateOverallProgress(),
-                                    minHeight: 4,
-                                    backgroundColor: Colors.grey[200],
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      Theme.of(context).colorScheme.primary,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                '${(_calculateOverallProgress() * 100).toStringAsFixed(0)}%',
-                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.grey[700],
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          // Chapter and page info
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                l10n.chapterInfo(_currentChapterIndex + 1, _chapters.length),
-                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  fontSize: 11,
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                              Text(
-                                l10n.pageInfo(_currentPageInChapter + 1, _pages.length),
-                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  fontSize: 11,
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
+                    // Summaries
+                    ListTile(
+                      leading: const Icon(Icons.summarize),
+                      title: const Text('Résumés'),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _openSummaries();
+                      },
                     ),
+                    // Back to library
+                    ListTile(
+                      leading: const Icon(Icons.arrow_back),
+                      title: const Text('Retour à la librairie'),
+                      onTap: () {
+                        Navigator.pop(context);
+                        Navigator.pop(context);
+                      },
+                    ),
+                    const SizedBox(height: 8),
                   ],
                 ),
               ),
-            ),
-          ),
-          // Menu overlay
-          if (_showMenu)
-            Positioned.fill(
-              child: GestureDetector(
-                onTap: _toggleMenu,
-                child: Container(
-                  color: Colors.black54,
-                  child: SafeArea(
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 80),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.surface,
-                          borderRadius: const BorderRadius.vertical(
-                            bottom: Radius.circular(20),
-                          ),
-                        ),
-                        padding: const EdgeInsets.all(8),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            ListTile(
-                              leading: const Icon(Icons.list),
-                              title: Text(l10n.chapters),
-                              onTap: () {
-                                setState(() {
-                                  _showMenu = false;
-                                });
-                                _showChapterList();
-                              },
-                            ),
-                            ListTile(
-                              leading: const Icon(Icons.pageview),
-                              title: Text(l10n.goToPage),
-                              onTap: () {
-                                setState(() {
-                                  _showMenu = false;
-                                });
-                                _showGoToPageDialog();
-                              },
-                            ),
-                            ListTile(
-                              leading: const Icon(Icons.summarize),
-                              title: Text(l10n.summary),
-                              onTap: () {
-                                setState(() {
-                                  _showMenu = false;
-                                });
-                                _showSummaryDialog();
-                              },
-                            ),
-                            const Divider(),
-                            ListTile(
-                              leading: const Icon(Icons.arrow_back),
-                              title: Text(l10n.backToLibrary),
-                              onTap: () {
-                                Navigator.pop(context);
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showChapterSelector() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text(
+                  'Sélectionner un chapitre',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
                 ),
               ),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _chapterEntries.length,
+                  itemBuilder: (context, index) {
+                    final chapter = _chapterEntries[index];
+                    return ListTile(
+                      title: Text(chapter.title),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _goToChapter(chapter.index);
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _goToChapter(int chapterIndex) {
+    if (_engine == null) return;
+    
+    // Find the first page of this chapter
+    final pageIndex = _engine!.findPageForChapter(chapterIndex);
+    if (pageIndex == null) return;
+    
+    // Get that page and navigate to it
+    final page = _engine!.getPage(pageIndex);
+    if (page != null) {
+      _scheduleRepagination(initialCharIndex: page.startCharIndex);
+    }
+  }
+
+  void _openSummaries() async {
+    if (_engine == null) return;
+    final currentPage = _engine!.getPage(_currentPageIndex);
+    if (currentPage == null) return;
+    
+    if (_summaryService == null) {
+      // Show dialog to configure API key
+      if (!mounted) return;
+      final shouldGoToSettings = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Configuration requise'),
+          content: const Text(
+            'Pour accéder aux résumés, vous devez configurer une clé API dans les paramètres.\n\n'
+            'Souhaitez-vous aller aux paramètres maintenant ?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Annuler'),
             ),
-        ],
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Paramètres'),
+            ),
+          ],
+        ),
+      );
+      
+      if (shouldGoToSettings == true && mounted) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const SettingsScreen(),
+          ),
+        );
+        // Reinitialize summary service in case user configured API key
+        await _initializeSummaryService();
+        // Reload vertical padding in case user changed it
+        await _loadVerticalPadding();
+        // Repaginate with new padding
+        if (mounted) {
+          _scheduleRepagination(retainCurrentPage: true);
+        }
+      }
+      return;
+    }
+    
+    final progress = ReadingProgress(
+      bookId: widget.book.id,
+      currentWordIndex: currentPage.startCharIndex,
+      currentChapterIndex: currentPage.chapterIndex,
+      currentPageInChapter: null,
+      lastRead: DateTime.now(),
+    );
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => SummaryScreen(
+          book: widget.book,
+          progress: progress,
+          enhancedSummaryService: _summaryService!,
+        ),
+      ),
+    );
+  }
+
+  Future<_DocumentExtractionResult> _extractDocument(EpubBook epub) async {
+    final blocks = <DocumentBlock>[];
+    final chapters = <_ChapterEntry>[];
+    final images = epub.Content?.Images;
+
+    final epubChapters = epub.Chapters ?? const <EpubChapter>[];
+    for (var i = 0; i < epubChapters.length; i++) {
+      final chapter = epubChapters[i];
+      final title = chapter.Title?.trim().isNotEmpty == true
+          ? chapter.Title!.trim()
+          : 'Chapitre ${i + 1}';
+      final html = chapter.HtmlContent ?? '';
+      if (html.isEmpty) {
+        continue;
+      }
+      final result = _buildBlocksFromHtml(
+        html,
+        chapterIndex: i,
+        images: images,
+      );
+      if (result.isNotEmpty) {
+        chapters.add(_ChapterEntry(index: i, title: title));
+        blocks.addAll(result);
+      }
+    }
+
+    if (blocks.isEmpty) {
+      blocks.add(
+        TextDocumentBlock(
+          chapterIndex: 0,
+          spacingBefore: 0,
+          spacingAfter: _paragraphSpacing,
+          text: 'Aucun contenu lisible dans ce livre.',
+          fontScale: 1.0,
+          fontWeight: FontWeight.normal,
+          fontStyle: FontStyle.italic,
+          textAlign: TextAlign.center,
+        ),
+      );
+      chapters.add(_ChapterEntry(index: 0, title: widget.book.title));
+    }
+
+    return _DocumentExtractionResult(blocks: blocks, chapters: chapters);
+  }
+
+  List<DocumentBlock> _buildBlocksFromHtml(
+    String html, {
+    required int chapterIndex,
+    Map<String, EpubByteContentFile>? images,
+  }) {
+    final document = html_parser.parse(html);
+    final body = document.body;
+    if (body == null) {
+      return const [];
+    }
+
+    final blocks = <DocumentBlock>[];
+    bool isFirstBlock = true;
+
+    void addTextBlock({
+      required String text,
+      double fontScale = 1.0,
+      FontWeight fontWeight = FontWeight.normal,
+      FontStyle fontStyle = FontStyle.normal,
+      TextAlign textAlign = TextAlign.left,
+      double spacingBefore = _paragraphSpacing / 2,
+      double spacingAfter = _paragraphSpacing,
+    }) {
+      final normalized = _normalizeWhitespace(text);
+      if (normalized.isEmpty) return;
+      blocks.add(
+        TextDocumentBlock(
+          chapterIndex: chapterIndex,
+          spacingBefore: isFirstBlock ? 0 : spacingBefore,
+          spacingAfter: spacingAfter,
+          text: normalized,
+          fontScale: fontScale,
+          fontWeight: fontWeight,
+          fontStyle: fontStyle,
+          textAlign: textAlign,
+        ),
+      );
+      isFirstBlock = false;
+    }
+
+    void addImageBlock(String? src) {
+      if (src == null) return;
+      final bytes = _resolveImageBytes(src, images);
+      if (bytes == null) return;
+      double? width;
+      double? height;
+      try {
+        final decoded = img.decodeImage(bytes);
+        if (decoded != null) {
+          width = decoded.width.toDouble();
+          height = decoded.height.toDouble();
+        }
+      } catch (_) {
+        width = null;
+        height = null;
+      }
+      blocks.add(
+        ImageDocumentBlock(
+          chapterIndex: chapterIndex,
+          spacingBefore: isFirstBlock ? 0 : _paragraphSpacing,
+          spacingAfter: _paragraphSpacing,
+          bytes: bytes,
+          intrinsicWidth: width,
+          intrinsicHeight: height,
+        ),
+      );
+      isFirstBlock = false;
+    }
+
+    void walk(dom.Node node) {
+      if (node is dom.Element) {
+        final name = node.localName?.toLowerCase();
+        switch (name) {
+          case 'h1':
+          case 'h2':
+          case 'h3':
+          case 'h4':
+          case 'h5':
+          case 'h6':
+            final level = int.tryParse(name![1]) ?? 3;
+            final scale = (2.2 - level * 0.2).clamp(1.2, 1.6);
+            addTextBlock(
+              text: node.text,
+              fontScale: scale,
+              fontWeight: FontWeight.w700,
+              textAlign: TextAlign.center,
+              spacingBefore: _headingSpacing,
+              spacingAfter: _paragraphSpacing,
+            );
+            return;
+          case 'p':
+          case 'div':
+          case 'section':
+          case 'article':
+          case 'blockquote':
+            addTextBlock(text: node.text);
+            for (final child in node.nodes) {
+              walk(child);
+            }
+            return;
+          case 'ul':
+          case 'ol':
+            final ordered = name == 'ol';
+            int counter = 1;
+            for (final child in node.children.where((n) => n.localName == 'li')) {
+              final text = _normalizeWhitespace(child.text);
+              if (text.isEmpty) continue;
+              final bullet = ordered ? '$counter. ' : '• ';
+              addTextBlock(
+                text: '$bullet$text',
+                spacingBefore: _paragraphSpacing / 2,
+                spacingAfter: _paragraphSpacing / 2,
+              );
+              counter++;
+            }
+            return;
+          case 'img':
+            addImageBlock(node.attributes['src']);
+            return;
+          case 'br':
+            addTextBlock(text: '');
+            return;
+          default:
+            for (final child in node.nodes) {
+              walk(child);
+            }
+            return;
+        }
+      } else if (node is dom.Text) {
+        addTextBlock(text: node.text);
+      } else {
+        for (final child in node.nodes) {
+          walk(child);
+        }
+      }
+    }
+
+    for (final node in body.nodes) {
+      walk(node);
+    }
+
+    return blocks;
+  }
+
+  Uint8List? _resolveImageBytes(String src, Map<String, EpubByteContentFile>? images) {
+    if (images == null || images.isEmpty) return null;
+    var normalized = src.replaceAll('\\', '/');
+    normalized = normalized.replaceAll('../', '');
+    final keyFragment = normalized.split('/').last;
+    for (final entry in images.entries) {
+      final key = entry.key.replaceAll('\\', '/');
+      if (key.endsWith(keyFragment)) {
+        final content = entry.value;
+        final data = content.Content;
+        if (data != null) {
+          return Uint8List.fromList(data);
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Normalize whitespace while preserving line breaks and paragraph structure.
+  /// Multiple spaces are collapsed to single spaces, but line breaks are preserved.
+  String _normalizeWhitespace(String text) {
+    // First, normalize line breaks to \n
+    var normalized = text.replaceAll(RegExp(r'\r\n'), '\n');
+    normalized = normalized.replaceAll(RegExp(r'\r'), '\n');
+    
+    // Collapse multiple spaces within a line (but preserve single spaces)
+    normalized = normalized.replaceAll(RegExp(r'[ \t]+'), ' ');
+    
+    // Collapse multiple line breaks to maximum 2 (paragraph break)
+    normalized = normalized.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+    
+    // Trim leading/trailing whitespace but preserve internal structure
+    return normalized.trim();
+  }
+}
+
+class _DocumentExtractionResult {
+  const _DocumentExtractionResult({
+    required this.blocks,
+    required this.chapters,
+  });
+
+  final List<DocumentBlock> blocks;
+  final List<_ChapterEntry> chapters;
+}
+
+class _ChapterEntry {
+  const _ChapterEntry({required this.index, required this.title});
+
+  final int index;
+  final String title;
+}
+
+class _PageMetrics {
+  const _PageMetrics({
+    required this.maxWidth,
+    required this.maxHeight,
+    required this.baseTextStyle,
+  });
+
+  final double maxWidth;
+  final double maxHeight;
+  final TextStyle baseTextStyle;
+}
+
+class _PageContentView extends StatelessWidget {
+  const _PageContentView({
+    required this.content,
+    required this.maxWidth,
+    required this.maxHeight,
+  });
+
+  final PageContent content;
+  final double maxWidth;
+  final double maxHeight;
+
+  @override
+  Widget build(BuildContext context) {
+    final children = <Widget>[];
+    
+    for (final block in content.blocks) {
+      if (block.spacingBefore > 0) {
+        children.add(SizedBox(height: block.spacingBefore));
+      }
+      
+      if (block is TextPageBlock) {
+        children.add(
+          Text(
+            block.text,
+            style: block.style,
+            textAlign: block.textAlign,
+            softWrap: true,
+          ),
+        );
+      } else if (block is ImagePageBlock) {
+        children.add(
+          SizedBox(
+            height: block.height,
+            width: maxWidth,
+            child: material.Image.memory(
+              block.bytes,
+              fit: BoxFit.contain,
+            ),
+          ),
+        );
+      }
+      
+      if (block.spacingAfter > 0) {
+        children.add(SizedBox(height: block.spacingAfter));
+      }
+    }
+
+    // No scroll view - pagination engine should prevent overflow
+    // Make page content ignore pointer events so taps pass through to parent GestureDetector
+    return IgnorePointer(
+      child: SizedBox(
+        width: maxWidth,
+        height: maxHeight,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: children,
+        ),
       ),
     );
   }

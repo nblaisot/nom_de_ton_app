@@ -1,14 +1,22 @@
 class ReadingProgress {
   final String bookId;
-  final int currentChapterIndex;
-  final int currentPageInChapter;
+  final int? currentChapterIndex;
+  final int? currentPageInChapter;
   final DateTime lastRead;
+  final int? totalPages; // legacy value, may be null
+  final String? contentCfi;
+  final double? progress;
+  final int? currentWordIndex; // First word of current page for lazy pagination
 
   ReadingProgress({
     required this.bookId,
-    required this.currentChapterIndex,
-    required this.currentPageInChapter,
     required this.lastRead,
+    this.currentChapterIndex,
+    this.currentPageInChapter,
+    this.totalPages,
+    this.contentCfi,
+    this.progress,
+    this.currentWordIndex,
   });
 
   Map<String, dynamic> toJson() {
@@ -17,15 +25,23 @@ class ReadingProgress {
       'currentChapterIndex': currentChapterIndex,
       'currentPageInChapter': currentPageInChapter,
       'lastRead': lastRead.toIso8601String(),
+      'totalPages': totalPages,
+      'contentCfi': contentCfi,
+      'progress': progress,
+      'currentWordIndex': currentWordIndex,
     };
   }
 
   factory ReadingProgress.fromJson(Map<String, dynamic> json) {
     return ReadingProgress(
       bookId: json['bookId'] as String,
-      currentChapterIndex: json['currentChapterIndex'] as int,
-      currentPageInChapter: json['currentPageInChapter'] as int,
+      currentChapterIndex: json['currentChapterIndex'] as int?,
+      currentPageInChapter: json['currentPageInChapter'] as int?,
       lastRead: DateTime.parse(json['lastRead'] as String),
+      totalPages: json['totalPages'] as int?,
+      contentCfi: json['contentCfi'] as String?,
+      progress: (json['progress'] as num?)?.toDouble(),
+      currentWordIndex: json['currentWordIndex'] as int?,
     );
   }
 
@@ -34,12 +50,20 @@ class ReadingProgress {
     int? currentChapterIndex,
     int? currentPageInChapter,
     DateTime? lastRead,
+    int? totalPages,
+    String? contentCfi,
+    double? progress,
+    int? currentWordIndex,
   }) {
     return ReadingProgress(
       bookId: bookId ?? this.bookId,
       currentChapterIndex: currentChapterIndex ?? this.currentChapterIndex,
       currentPageInChapter: currentPageInChapter ?? this.currentPageInChapter,
       lastRead: lastRead ?? this.lastRead,
+      totalPages: totalPages ?? this.totalPages,
+      contentCfi: contentCfi ?? this.contentCfi,
+      progress: progress ?? this.progress,
+      currentWordIndex: currentWordIndex ?? this.currentWordIndex,
     );
   }
 }

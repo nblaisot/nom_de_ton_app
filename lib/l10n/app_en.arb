@@ -101,6 +101,10 @@
   "@chapters": {
     "description": "Chapters menu item"
   },
+  "tableOfContents": "Table of Contents",
+  "@tableOfContents": {
+    "description": "Table of contents menu item"
+  },
   "chapter": "Chapter {number}",
   "@chapter": {
     "description": "Chapter label with number",
@@ -113,6 +117,18 @@
   "goToPage": "Go to Page",
   "@goToPage": {
     "description": "Go to page menu item"
+  },
+  "goToPercentage": "Go to % progress",
+  "@goToPercentage": {
+    "description": "Go to a percentage of the book"
+  },
+  "enterPercentage": "Enter progress percentage (0-100)",
+  "@enterPercentage": {
+    "description": "Prompt label for percentage input"
+  },
+  "invalidPercentage": "Please enter a value between 0 and 100",
+  "@invalidPercentage": {
+    "description": "Error message when percentage input is invalid"
   },
   "summary": "Summary",
   "@summary": {
@@ -155,6 +171,18 @@
   "noChaptersAvailable": "No chapters available",
   "@noChaptersAvailable": {
     "description": "No chapters error message"
+  },
+  "resetSummaries": "Reset summaries",
+  "@resetSummaries": {
+    "description": "Menu item to reset summaries"
+  },
+  "summariesReset": "Summaries reset",
+  "@summariesReset": {
+    "description": "Message displayed when summaries are reset"
+  },
+  "resetSummariesError": "Unable to reset summaries. Please try again.",
+  "@resetSummariesError": {
+    "description": "Error message when reset fails"
   },
   "summaryFeatureComingSoon": "Summary feature will be implemented later with LLM integration.",
   "@summaryFeatureComingSoon": {
@@ -247,6 +275,252 @@
   "thisChapterHasPages_plural": "This chapter has {count} pages",
   "@thisChapterHasPages_plural": {
     "description": "Chapter page count message (plural)"
+  },
+  "settings": "Settings",
+  "@settings": {
+    "description": "Settings screen title"
+  },
+  "summaryProvider": "Summary Provider",
+  "@summaryProvider": {
+    "description": "Summary provider section title"
+  },
+  "summaryProviderDescription": "Choose how summaries are generated",
+  "@summaryProviderDescription": {
+    "description": "Summary provider section description"
+  },
+  "summaryProviderMissing": "Configure a summary provider in Settings to generate summaries.",
+  "@summaryProviderMissing": {
+    "description": "Message shown when summary provider is not configured"
+  },
+  "promptSettings": "Prompt Settings",
+  "@promptSettings": {
+    "description": "Prompt settings section title"
+  },
+  "promptSettingsDescription": "Customize the prompts used for summary generation. You can use placeholders in your prompts: text (for the text to summarize), bookTitle (for the book title), and chapterTitle (for the chapter title). Write them with curly braces in your prompts.",
+  "@promptSettingsDescription": {
+    "description": "Description of prompt settings"
+  },
+  "chunkSummaryPrompt": "Chunk Summary Prompt",
+  "@chunkSummaryPrompt": {
+    "description": "Label for chunk summary prompt"
+  },
+  "chunkSummaryPromptFr": "Chunk Summary Prompt (French)",
+  "@chunkSummaryPromptFr": {
+    "description": "Label for French chunk summary prompt"
+  },
+  "chunkSummaryPromptEn": "Chunk Summary Prompt (English)",
+  "@chunkSummaryPromptEn": {
+    "description": "Label for English chunk summary prompt"
+  },
+  "characterExtractionPrompt": "Character Extraction Prompt",
+  "@characterExtractionPrompt": {
+    "description": "Label for character extraction prompt"
+  },
+  "characterExtractionPromptFr": "Character Extraction Prompt (French)",
+  "@characterExtractionPromptFr": {
+    "description": "Label for French character extraction prompt"
+  },
+  "characterExtractionPromptEn": "Character Extraction Prompt (English)",
+  "@characterExtractionPromptEn": {
+    "description": "Label for English character extraction prompt"
+  },
+  "batchSummaryPrompt": "Batch Summary Prompt",
+  "@batchSummaryPrompt": {
+    "description": "Label for batch summary prompt"
+  },
+  "batchSummaryPromptFr": "Batch Summary Prompt (French)",
+  "@batchSummaryPromptFr": {
+    "description": "Label for French batch summary prompt"
+  },
+  "batchSummaryPromptEn": "Batch Summary Prompt (English)",
+  "@batchSummaryPromptEn": {
+    "description": "Label for English batch summary prompt"
+  },
+  "narrativeSynthesisPrompt": "Narrative Synthesis Prompt",
+  "@narrativeSynthesisPrompt": {
+    "description": "Label for narrative synthesis prompt"
+  },
+  "narrativeSynthesisPromptFr": "Narrative Synthesis Prompt (French)",
+  "@narrativeSynthesisPromptFr": {
+    "description": "Label for French narrative synthesis prompt"
+  },
+  "narrativeSynthesisPromptEn": "Narrative Synthesis Prompt (English)",
+  "@narrativeSynthesisPromptEn": {
+    "description": "Label for English narrative synthesis prompt"
+  },
+  "fallbackSummaryPrompt": "Fallback Summary Prompt",
+  "@fallbackSummaryPrompt": {
+    "description": "Label for fallback summary prompt"
+  },
+  "fallbackSummaryPromptFr": "Fallback Summary Prompt (French)",
+  "@fallbackSummaryPromptFr": {
+    "description": "Label for French fallback summary prompt"
+  },
+  "fallbackSummaryPromptEn": "Fallback Summary Prompt (English)",
+  "@fallbackSummaryPromptEn": {
+    "description": "Label for English fallback summary prompt"
+  },
+  "conciseSummaryPrompt": "Concise Summary Prompt",
+  "@conciseSummaryPrompt": {
+    "description": "Label for concise summary prompt"
+  },
+  "conciseSummaryPromptFr": "Concise Summary Prompt (French)",
+  "@conciseSummaryPromptFr": {
+    "description": "Label for French concise summary prompt"
+  },
+  "conciseSummaryPromptEn": "Concise Summary Prompt (English)",
+  "@conciseSummaryPromptEn": {
+    "description": "Label for English concise summary prompt"
+  },
+  "resetPrompts": "Reset to Default",
+  "@resetPrompts": {
+    "description": "Button to reset prompts to default"
+  },
+  "promptsReset": "Prompts reset to default values",
+  "@promptsReset": {
+    "description": "Message when prompts are reset"
+  },
+  "promptSaved": "Prompt saved",
+  "@promptSaved": {
+    "description": "Message when a prompt is saved"
+  },
+  "openAIModel": "OpenAI (GPT)",
+  "@openAIModel": {
+    "description": "OpenAI model option"
+  },
+  "openAIModelConfigured": "Configured - Requires internet",
+  "@openAIModelConfigured": {
+    "description": "OpenAI model configured message"
+  },
+  "openAIModelNotConfigured": "Not configured - API key required",
+  "@openAIModelNotConfigured": {
+    "description": "OpenAI model not configured message"
+  },
+  "openAISettings": "OpenAI Settings",
+  "@openAISettings": {
+    "description": "OpenAI settings section title"
+  },
+  "openAISettingsDescription": "Enter your OpenAI API key to use GPT for summaries",
+  "@openAISettingsDescription": {
+    "description": "OpenAI settings section description"
+  },
+  "openAIApiKey": "OpenAI API Key",
+  "@openAIApiKey": {
+    "description": "OpenAI API key label"
+  },
+  "enterOpenAIApiKey": "Enter your OpenAI API key",
+  "@enterOpenAIApiKey": {
+    "description": "OpenAI API key input hint"
+  },
+  "saveApiKey": "Save API Key",
+  "@saveApiKey": {
+    "description": "Save API key button label"
+  },
+  "apiKeyRequired": "API key is required",
+  "@apiKeyRequired": {
+    "description": "API key required error message"
+  },
+  "settingsSaved": "Settings saved",
+  "@settingsSaved": {
+    "description": "Settings saved confirmation message"
+  },
+  "errorSavingSettings": "Error saving settings",
+  "@errorSavingSettings": {
+    "description": "Error saving settings message"
+  },
+  "information": "Information",
+  "@information": {
+    "description": "Information section title"
+  },
+  "summarySettingsInfo": "OpenAI and Mistral AI provide fast and accurate summaries but require an internet connection and API key. Configure your preferred provider and customize the prompts used for summary generation.",
+  "@summarySettingsInfo": {
+    "description": "Summary settings information text"
+  },
+  "generatingSummary": "Generating summary...",
+  "@generatingSummary": {
+    "description": "Generating summary message"
+  },
+  "errorGeneratingSummary": "Error generating summary: {error}",
+  "@errorGeneratingSummary": {
+    "description": "Error generating summary message",
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "summaryForChapter": "Summary for {title}",
+  "@summaryForChapter": {
+    "description": "Summary dialog title",
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
+  },
+  "noSummaryAvailable": "No summary available",
+  "@noSummaryAvailable": {
+    "description": "No summary available message"
+  },
+  "deleteBookConfirm": "This will delete the book from the library. Are you sure?",
+  "@deleteBookConfirm": {
+    "description": "Confirmation message when deleting a book"
+  },
+  "confirm": "Confirm",
+  "@confirm": {
+    "description": "Confirm button label"
+  },
+  "textSize": "Text size",
+  "@textSize": {
+    "description": "Text size label in reader menu"
+  },
+  "language": "Language",
+  "@language": {
+    "description": "Language setting label"
+  },
+  "languageDescription": "Choose your preferred language. Changes require app restart.",
+  "@languageDescription": {
+    "description": "Language setting description"
+  },
+  "languageSystemDefault": "System Default",
+  "@languageSystemDefault": {
+    "description": "System default language option"
+  },
+  "languageSystemDefaultDescription": "Use device language settings",
+  "@languageSystemDefaultDescription": {
+    "description": "System default language description"
+  },
+  "languageChangedRestart": "Language preference saved. Please restart the app for changes to take effect.",
+  "@languageChangedRestart": {
+    "description": "Message shown when language is changed"
+  },
+  "languageEnglish": "English",
+  "@languageEnglish": {
+    "description": "English language option"
+  },
+  "languageFrench": "French",
+  "@languageFrench": {
+    "description": "French language option"
+  },
+  "summaryFromBeginning": "Summary from the beginning",
+  "@summaryFromBeginning": {
+    "description": "Summary type option - from beginning"
+  },
+  "summarySinceLastTime": "Summary since last time",
+  "@summarySinceLastTime": {
+    "description": "Summary type option - since last time"
+  },
+  "horizontalPaddingSaved": "Horizontal padding saved. Changes will apply when you reopen a book.",
+  "@horizontalPaddingSaved": {
+    "description": "Message shown when horizontal padding is saved"
+  },
+  "verticalPaddingSaved": "Vertical padding saved. Changes will apply when you reopen a book.",
+  "@verticalPaddingSaved": {
+    "description": "Message shown when vertical padding is saved"
+  },
+  "summaryCharacters": "Characters",
+  "@summaryCharacters": {
+    "description": "Summary type option - characters"
   }
 }
 
