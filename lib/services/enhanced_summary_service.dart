@@ -143,6 +143,10 @@ class EnhancedSummaryService {
       : _chunkConfig = ChunkingConfig.resolve(_baseSummaryService),
         _promptConfigService = PromptConfigService(prefs);
 
+  Future<String> runCustomPrompt(String prompt, String languageCode) async {
+    return await _baseSummaryService.generateSummary(prompt, languageCode);
+  }
+
   /// Extract plain text from HTML content
   String _extractTextFromHtml(String htmlContent) {
     try {

@@ -20,6 +20,10 @@ class PromptConfigService {
   static const String _fallbackSummaryPromptEnKey = 'fallback_summary_prompt_en';
   static const String _conciseSummaryPromptFrKey = 'concise_summary_prompt_fr';
   static const String _conciseSummaryPromptEnKey = 'concise_summary_prompt_en';
+  static const String _textActionLabelFrKey = 'text_action_label_fr';
+  static const String _textActionLabelEnKey = 'text_action_label_en';
+  static const String _textActionPromptFrKey = 'text_action_prompt_fr';
+  static const String _textActionPromptEnKey = 'text_action_prompt_en';
   
   PromptConfigService(this._prefs);
   
@@ -209,6 +213,13 @@ Full summary:
 
 Concise summary:''';
 
+  static const String _defaultTextActionLabelFr = 'Traduire';
+  static const String _defaultTextActionLabelEn = 'Translate';
+  static const String _defaultTextActionPromptFr =
+      'Veuillez traduire le texte suivant en {language} :\n\n{text}';
+  static const String _defaultTextActionPromptEn =
+      'Please translate the following text to {language}:\n\n{text}';
+
   /// Get chunk summary prompt
   String getChunkSummaryPrompt(String language) {
     final key = language == 'fr' ? _chunkSummaryPromptFrKey : _chunkSummaryPromptEnKey;
@@ -287,6 +298,50 @@ Concise summary:''';
     await _prefs.setString(key, prompt);
   }
 
+  /// Get the customizable label for the reader selection action
+  String getTextActionLabel(String language) {
+    final key = language == 'fr' ? _textActionLabelFrKey : _textActionLabelEnKey;
+    final fallback = language == 'fr'
+        ? _defaultTextActionLabelFr
+        : _defaultTextActionLabelEn;
+    final value = _prefs.getString(key);
+    if (value == null || value.trim().isEmpty) {
+      return fallback;
+    }
+    return value.trim();
+  }
+
+  /// Save the label for the reader selection action
+  Future<void> setTextActionLabel(String language, String label) async {
+    final key = language == 'fr' ? _textActionLabelFrKey : _textActionLabelEnKey;
+    final normalized = label.trim().isEmpty
+        ? (language == 'fr' ? _defaultTextActionLabelFr : _defaultTextActionLabelEn)
+        : label.trim();
+    await _prefs.setString(key, normalized);
+  }
+
+  /// Get the prompt used for the reader selection action
+  String getTextActionPrompt(String language) {
+    final key = language == 'fr' ? _textActionPromptFrKey : _textActionPromptEnKey;
+    final fallback = language == 'fr'
+        ? _defaultTextActionPromptFr
+        : _defaultTextActionPromptEn;
+    final value = _prefs.getString(key);
+    if (value == null || value.trim().isEmpty) {
+      return fallback;
+    }
+    return value;
+  }
+
+  /// Save the prompt used for the reader selection action
+  Future<void> setTextActionPrompt(String language, String prompt) async {
+    final key = language == 'fr' ? _textActionPromptFrKey : _textActionPromptEnKey;
+    final normalized = prompt.trim().isEmpty
+        ? (language == 'fr' ? _defaultTextActionPromptFr : _defaultTextActionPromptEn)
+        : prompt;
+    await _prefs.setString(key, normalized);
+  }
+
   /// Reset all prompts to default values
   Future<void> resetAllPrompts() async {
     await _prefs.remove(_chunkSummaryPromptFrKey);
@@ -301,11 +356,16 @@ Concise summary:''';
     await _prefs.remove(_fallbackSummaryPromptEnKey);
     await _prefs.remove(_conciseSummaryPromptFrKey);
     await _prefs.remove(_conciseSummaryPromptEnKey);
+    await _prefs.remove(_textActionLabelFrKey);
+    await _prefs.remove(_textActionLabelEnKey);
+    await _prefs.remove(_textActionPromptFrKey);
+    await _prefs.remove(_textActionPromptEnKey);
   }
 
   /// Format a prompt by replacing placeholders
   /// Supports {text} and {bookTitle} placeholders
-  String formatPrompt(String prompt, {String? text, String? bookTitle, String? chapterTitle}) {
+  String formatPrompt(String prompt,
+      {String? text, String? bookTitle, String? chapterTitle, String? languageName}) {
     var formatted = prompt;
     if (text != null) {
       formatted = formatted.replaceAll('{text}', text);
@@ -315,6 +375,9 @@ Concise summary:''';
     }
     if (chapterTitle != null) {
       formatted = formatted.replaceAll('{chapterTitle}', chapterTitle);
+    }
+    if (languageName != null) {
+      formatted = formatted.replaceAll('{language}', languageName);
     }
     return formatted;
   }

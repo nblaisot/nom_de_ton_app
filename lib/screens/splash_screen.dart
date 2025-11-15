@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import '../services/app_state_service.dart';
+import '../services/book_service.dart';
+import '../models/book.dart';
 import 'library_screen.dart';
+import 'reader_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -10,23 +14,49 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashScreenState extends State<SplashScreen> {
+  final AppStateService _appStateService = AppStateService();
+  final BookService _bookService = BookService();
+
   @override
   void initState() {
     super.initState();
-    // Navigate to library screen after 3 seconds
-    Timer(
-      const Duration(seconds: 3),
-      () {
-        if (mounted) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const LibraryScreen(),
-            ),
-          );
+    _navigateAfterDelay();
+  }
+
+  Future<void> _navigateAfterDelay() async {
+    await Future.delayed(const Duration(seconds: 3));
+    if (!mounted) return;
+
+    Book? bookToOpen;
+    try {
+      final lastBookId = await _appStateService.getLastOpenedBookId();
+      if (lastBookId != null) {
+        bookToOpen = await _bookService.getBookById(lastBookId);
+        if (bookToOpen == null) {
+          await _appStateService.clearLastOpenedBook();
         }
-      },
-    );
+      }
+    } catch (e) {
+      debugPrint('Failed to determine last opened book: $e');
+    }
+
+    if (!mounted) return;
+
+    if (bookToOpen != null) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ReaderScreen(book: bookToOpen!),
+        ),
+      );
+    } else {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const LibraryScreen(),
+        ),
+      );
+    }
   }
 
   @override

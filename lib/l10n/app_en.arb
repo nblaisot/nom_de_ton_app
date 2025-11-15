@@ -93,6 +93,14 @@
   "@refresh": {
     "description": "Refresh button tooltip"
   },
+  "libraryShowGrid": "Grid view",
+  "@libraryShowGrid": {
+    "description": "Tooltip for switching to the grid view"
+  },
+  "libraryShowList": "List view",
+  "@libraryShowList": {
+    "description": "Tooltip for switching to the list view"
+  },
   "retry": "Retry",
   "@retry": {
     "description": "Retry button label"
@@ -299,6 +307,62 @@
   "promptSettingsDescription": "Customize the prompts used for summary generation. You can use placeholders in your prompts: text (for the text to summarize), bookTitle (for the book title), and chapterTitle (for the chapter title). Write them with curly braces in your prompts.",
   "@promptSettingsDescription": {
     "description": "Description of prompt settings"
+  },
+  "textSelectionActionSettings": "Text selection action",
+  "@textSelectionActionSettings": {
+    "description": "Section title for configuring the reader selection action"
+  },
+  "textSelectionActionDescription": "Customize the action displayed when selecting text. You can use {text} for the selected text and {language} for the application language.",
+  "@textSelectionActionDescription": {
+    "description": "Description for the reader selection action section"
+  },
+  "textSelectionActionLabelFr": "Action label (French)",
+  "@textSelectionActionLabelFr": {
+    "description": "Label for the French selection action name"
+  },
+  "textSelectionActionLabelEn": "Action label (English)",
+  "@textSelectionActionLabelEn": {
+    "description": "Label for the English selection action name"
+  },
+  "textSelectionActionPromptFr": "Action prompt (French)",
+  "@textSelectionActionPromptFr": {
+    "description": "Editor label for the French selection action prompt"
+  },
+  "textSelectionActionPromptEn": "Action prompt (English)",
+  "@textSelectionActionPromptEn": {
+    "description": "Editor label for the English selection action prompt"
+  },
+  "textSelectionActionProcessing": "Processing selection...",
+  "@textSelectionActionProcessing": {
+    "description": "Message shown while the selection action is running"
+  },
+  "textSelectionActionError": "Unable to process the selected text.",
+  "@textSelectionActionError": {
+    "description": "Error message when the selection action fails"
+  },
+  "textSelectionSelectedTextLabel": "Selected text",
+  "@textSelectionSelectedTextLabel": {
+    "description": "Label shown above the selected text in the action dialog"
+  },
+  "textSelectionActionResultLabel": "Response",
+  "@textSelectionActionResultLabel": {
+    "description": "Label shown above the generated response in the action dialog"
+  },
+  "textSelectionDefaultLabel": "Translate",
+  "@textSelectionDefaultLabel": {
+    "description": "Default label for the selection action button"
+  },
+  "summaryConfigurationRequiredTitle": "Configuration required",
+  "@summaryConfigurationRequiredTitle": {
+    "description": "Dialog title when summary service is missing"
+  },
+  "summaryConfigurationRequiredBody": "To use this feature you need to configure an AI provider in the settings. Would you like to open the settings now?",
+  "@summaryConfigurationRequiredBody": {
+    "description": "Dialog body when summary service is missing"
+  },
+  "appLanguageName": "English",
+  "@appLanguageName": {
+    "description": "Display name of the current language"
   },
   "chunkSummaryPrompt": "Chunk Summary Prompt",
   "@chunkSummaryPrompt": {

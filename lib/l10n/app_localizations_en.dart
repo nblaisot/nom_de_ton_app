@@ -70,6 +70,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get refresh => 'Refresh';
 
   @override
+  String get libraryShowGrid => 'Grid view';
+
+  @override
+  String get libraryShowList => 'List view';
+
+  @override
   String get retry => 'Retry';
 
   @override
@@ -209,6 +215,50 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get promptSettingsDescription =>
       'Customize the prompts used for summary generation. You can use placeholders in your prompts: text (for the text to summarize), bookTitle (for the book title), and chapterTitle (for the chapter title). Write them with curly braces in your prompts.';
+
+  @override
+  String get textSelectionActionSettings => 'Text selection action';
+
+  @override
+  String get textSelectionActionDescription =>
+      'Customize the action displayed when selecting text. You can use {text} for the selected text and {language} for the application language.';
+
+  @override
+  String get textSelectionActionLabelFr => 'Action label (French)';
+
+  @override
+  String get textSelectionActionLabelEn => 'Action label (English)';
+
+  @override
+  String get textSelectionActionPromptFr => 'Action prompt (French)';
+
+  @override
+  String get textSelectionActionPromptEn => 'Action prompt (English)';
+
+  @override
+  String get textSelectionActionProcessing => 'Processing selection...';
+
+  @override
+  String get textSelectionActionError => 'Unable to process the selected text.';
+
+  @override
+  String get textSelectionSelectedTextLabel => 'Selected text';
+
+  @override
+  String get textSelectionActionResultLabel => 'Response';
+
+  @override
+  String get textSelectionDefaultLabel => 'Translate';
+
+  @override
+  String get summaryConfigurationRequiredTitle => 'Configuration required';
+
+  @override
+  String get summaryConfigurationRequiredBody =>
+      'To use this feature you need to configure an AI provider in the settings. Would you like to open the settings now?';
+
+  @override
+  String get appLanguageName => 'English';
 
   @override
   String get chunkSummaryPrompt => 'Chunk Summary Prompt';

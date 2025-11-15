@@ -111,6 +111,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       'fallbackSummary_en',
       'conciseSummary_fr',
       'conciseSummary_en',
+      'textActionLabel_fr',
+      'textActionLabel_en',
+      'textActionPrompt_fr',
+      'textActionPrompt_en',
     ];
     
     for (final key in promptKeys) {
@@ -137,6 +141,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           break;
         case 'conciseSummary':
           promptText = _promptConfigService.getConciseSummaryPrompt(language);
+          break;
+        case 'textActionLabel':
+          promptText = _promptConfigService.getTextActionLabel(language);
+          break;
+        case 'textActionPrompt':
+          promptText = _promptConfigService.getTextActionPrompt(language);
           break;
         default:
           promptText = '';
@@ -181,6 +191,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           break;
         case 'conciseSummary':
           await _promptConfigService.setConciseSummaryPrompt(language, controller.text);
+          break;
+        case 'textActionLabel':
+          await _promptConfigService.setTextActionLabel(language, controller.text);
+          break;
+        case 'textActionPrompt':
+          await _promptConfigService.setTextActionPrompt(language, controller.text);
           break;
       }
       
@@ -227,6 +243,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             break;
           case 'conciseSummary':
             promptText = _promptConfigService.getConciseSummaryPrompt(language);
+            break;
+          case 'textActionLabel':
+            promptText = _promptConfigService.getTextActionLabel(language);
+            break;
+          case 'textActionPrompt':
+            promptText = _promptConfigService.getTextActionPrompt(language);
             break;
           default:
             promptText = '';
@@ -443,11 +465,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildPromptTextField(String key, String label) {
     final controller = _promptControllers[key];
     final focusNode = _promptFocusNodes[key];
-    
+
     if (controller == null || focusNode == null) {
       return const SizedBox.shrink();
     }
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -473,6 +495,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
               border: InputBorder.none,
             ),
             style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+          ),
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
+  Widget _buildActionLabelField(String key, String label) {
+    final controller = _promptControllers[key];
+    final focusNode = _promptFocusNodes[key];
+
+    if (controller == null || focusNode == null) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: controller,
+          focusNode: focusNode,
+          maxLines: 1,
+          decoration: InputDecoration(
+            border: const OutlineInputBorder(),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            hintText: label,
           ),
         ),
         const SizedBox(height: 16),
@@ -868,9 +921,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
           ),
-          
+
+          // Reader text selection action
+          ExpansionTile(
+            title: Text(l10n.textSelectionActionSettings),
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      l10n.textSelectionActionDescription,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: Colors.grey[600],
+                          ),
+                    ),
+                    const SizedBox(height: 16),
+                    _buildActionLabelField('textActionLabel_fr', l10n.textSelectionActionLabelFr),
+                    _buildActionLabelField('textActionLabel_en', l10n.textSelectionActionLabelEn),
+                    _buildPromptTextField('textActionPrompt_fr', l10n.textSelectionActionPromptFr),
+                    _buildPromptTextField('textActionPrompt_en', l10n.textSelectionActionPromptEn),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
           const SizedBox(height: 16),
-          
+
           // Reset Prompts Button
           ElevatedButton(
             onPressed: _resetPrompts,
