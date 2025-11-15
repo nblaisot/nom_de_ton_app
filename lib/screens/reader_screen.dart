@@ -10,6 +10,8 @@ import 'package:html/parser.dart' as html_parser;
 import 'package:image/image.dart' as img show decodeImage;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:memoreader/l10n/app_localizations.dart';
+
 import '../models/book.dart';
 import '../models/reading_progress.dart';
 import '../services/book_service.dart';
@@ -17,6 +19,8 @@ import '../services/enhanced_summary_service.dart';
 import '../services/summary_config_service.dart';
 import '../services/settings_service.dart';
 import '../services/summary_database_service.dart';
+import '../services/app_state_service.dart';
+import '../services/prompt_config_service.dart';
 import '../utils/html_text_extractor.dart';
 import 'reader/document_model.dart';
 import 'reader/line_metrics_pagination_engine.dart';
@@ -47,6 +51,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
       const PaginationCacheManager();
   EnhancedSummaryService? _summaryService;
   final PageController _pageController = PageController(initialPage: 1);
+  final AppStateService _appStateService = AppStateService();
   
   double _horizontalPadding = _defaultHorizontalPadding; // Will be loaded from settings
   double _verticalPadding = _defaultVerticalPadding; // Will be loaded from settings
@@ -74,6 +79,11 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
 
   ReadingProgress? _savedProgress;
   Timer? _progressDebounce;
+  bool _hasActiveSelection = false;
+  bool _isProcessingSelection = false;
+  String? _selectionActionLabel;
+  String? _selectionActionPrompt;
+  Locale? _lastLocale;
 
   @override
   void initState() {
@@ -82,6 +92,17 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     _initializeSummaryService();
     _loadVerticalPadding();
     _loadBook();
+    unawaited(_appStateService.setLastOpenedBook(widget.book.id));
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final locale = Localizations.localeOf(context);
+    if (_lastLocale != locale) {
+      _lastLocale = locale;
+      _loadSelectionActionConfig();
+    }
   }
 
   Future<void> _loadVerticalPadding() async {
@@ -110,6 +131,23 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     }
   }
 
+  Future<void> _loadSelectionActionConfig() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final promptService = PromptConfigService(prefs);
+      final language = Localizations.localeOf(context).languageCode;
+      final label = promptService.getTextActionLabel(language);
+      final prompt = promptService.getTextActionPrompt(language);
+      if (!mounted) return;
+      setState(() {
+        _selectionActionLabel = label;
+        _selectionActionPrompt = prompt;
+      });
+    } catch (e) {
+      debugPrint('Failed to load selection action config: $e');
+    }
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -124,6 +162,24 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     super.didChangeMetrics();
     if (!_isLoading && mounted) {
       _scheduleRepagination(retainCurrentPage: true);
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (!_isLoading && mounted) {
+      _scheduleRepagination(retainCurrentPage: true);
+    }
+
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      final page = _engine?.getPage(_currentPageIndex);
+      if (page != null) {
+        unawaited(_saveProgress(page));
+      }
+      unawaited(_appStateService.setLastOpenedBook(widget.book.id));
     }
   }
 
@@ -161,17 +217,19 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
   void _scheduleRepagination({int? initialCharIndex, bool retainCurrentPage = false, Size? actualSize}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _docBlocks.isEmpty) return;
-      int targetCharIndex;
+      int? targetCharIndex;
       if (retainCurrentPage) {
-        // Get current page's start char index
         final currentPage = _engine?.getPage(_currentPageIndex);
-        targetCharIndex = currentPage?.startCharIndex ?? 0;
+        targetCharIndex = currentPage?.startCharIndex ??
+            _savedProgress?.currentCharacterIndex ?? _savedProgress?.currentWordIndex;
       } else if (initialCharIndex != null) {
         targetCharIndex = initialCharIndex;
-      } else {
-        targetCharIndex =
-            _savedProgress?.currentCharacterIndex ?? _savedProgress?.currentWordIndex ?? 0;
       }
+
+      targetCharIndex ??=
+          _savedProgress?.currentCharacterIndex ?? _savedProgress?.currentWordIndex ?? 0;
+      targetCharIndex = math.max(0, targetCharIndex);
+
       unawaited(_rebuildPagination(targetCharIndex, actualSize: actualSize));
     });
   }
@@ -293,6 +351,14 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
   }
 
   void _handleTapDown(TapDownDetails details) {
+    if (_hasActiveSelection) {
+      SelectionContainer.maybeOf(context)?.clearSelection();
+      setState(() {
+        _hasActiveSelection = false;
+      });
+      return;
+    }
+
     final size = MediaQuery.of(context).size;
     final action = determineTapAction(details.globalPosition, size);
 
@@ -321,6 +387,14 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     }
   }
 
+  void _handleSelectionChanged(bool hasSelection) {
+    if (_hasActiveSelection != hasSelection) {
+      setState(() {
+        _hasActiveSelection = hasSelection;
+      });
+    }
+  }
+
   Future<void> _saveProgress(PageContent page) async {
     try {
       final pageProgress = _calculateProgressForPage(page);
@@ -334,6 +408,7 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
         lastRead: DateTime.now(),
       );
       await _bookService.saveReadingProgress(progress);
+      _savedProgress = progress;
       unawaited(_summaryDatabase.updateLastReadingStop(
         widget.book.id,
         chunkIndex: page.chapterIndex,
@@ -712,6 +787,12 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
       return Container();
     }
 
+    final l10n = AppLocalizations.of(context);
+    final defaultActionLabel = l10n?.textSelectionDefaultLabel ?? 'Translate';
+    final actionLabel = (_selectionActionLabel ?? defaultActionLabel).trim().isEmpty
+        ? defaultActionLabel
+        : _selectionActionLabel!;
+
     // Center the page content with proper constraints
     return SizedBox.expand(
       child: Padding(
@@ -727,6 +808,10 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
             maxHeight: metrics.maxHeight,
             textHeightBehavior: metrics.textHeightBehavior,
             textScaler: metrics.textScaler,
+            actionLabel: actionLabel,
+            onSelectionAction: _handleSelectionAction,
+            onSelectionChanged: _handleSelectionChanged,
+            isProcessingAction: _isProcessingSelection,
           ),
         ),
       ),
@@ -798,6 +883,52 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     }
   }
 
+  Future<bool> _ensureSummaryServiceReady() async {
+    if (_summaryService != null) {
+      return true;
+    }
+
+    if (!mounted) {
+      return false;
+    }
+
+    final l10n = AppLocalizations.of(context)!;
+    final shouldGoToSettings = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.summaryConfigurationRequiredTitle),
+        content: Text(l10n.summaryConfigurationRequiredBody),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(l10n.cancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(l10n.settings),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldGoToSettings == true && mounted) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const SettingsScreen(),
+        ),
+      );
+      await _initializeSummaryService();
+      await _loadVerticalPadding();
+      await _loadSelectionActionConfig();
+      if (mounted) {
+        _scheduleRepagination(retainCurrentPage: true);
+      }
+    }
+
+    return _summaryService != null;
+  }
+
   void _handleEngineUpdate() {
     if (!mounted || _engine == null) return;
     final engine = _engine!;
@@ -820,50 +951,11 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     if (_engine == null) return;
     final currentPage = _engine!.getPage(_currentPageIndex);
     if (currentPage == null) return;
-    
-    if (_summaryService == null) {
-      // Show dialog to configure API key
-      if (!mounted) return;
-      final shouldGoToSettings = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Configuration requise'),
-          content: const Text(
-            'Pour accéder aux résumés, vous devez configurer une clé API dans les paramètres.\n\n'
-            'Souhaitez-vous aller aux paramètres maintenant ?',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Annuler'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Paramètres'),
-            ),
-          ],
-        ),
-      );
-      
-      if (shouldGoToSettings == true && mounted) {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => const SettingsScreen(),
-          ),
-        );
-        // Reinitialize summary service in case user configured API key
-        await _initializeSummaryService();
-        // Reload vertical padding in case user changed it
-        await _loadVerticalPadding();
-        // Repaginate with new padding
-        if (mounted) {
-          _scheduleRepagination(retainCurrentPage: true);
-        }
-      }
+
+    if (!await _ensureSummaryServiceReady()) {
       return;
     }
-    
+
     final progress = ReadingProgress(
       bookId: widget.book.id,
       currentWordIndex: currentPage.startWordIndex,
@@ -882,6 +974,178 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
           enhancedSummaryService: _summaryService!,
         ),
       ),
+    );
+  }
+
+  Future<void> _handleSelectionAction(String selectedText) async {
+    final trimmed = selectedText.trim();
+    if (trimmed.isEmpty || _isProcessingSelection) {
+      return;
+    }
+
+    if (!await _ensureSummaryServiceReady()) {
+      return;
+    }
+
+    SelectionContainer.maybeOf(context)?.clearSelection();
+    setState(() {
+      _isProcessingSelection = true;
+      _hasActiveSelection = false;
+    });
+
+    final l10n = AppLocalizations.of(context)!;
+    bool progressVisible = true;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        content: Row(
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(width: 16),
+            Expanded(child: Text(l10n.textSelectionActionProcessing)),
+          ],
+        ),
+      ),
+    ).then((_) => progressVisible = false);
+
+    try {
+      final locale = Localizations.localeOf(context);
+      final languageCode = locale.languageCode;
+      final prefs = await SharedPreferences.getInstance();
+      final promptService = PromptConfigService(prefs);
+      final languageName = l10n.appLanguageName;
+
+      final label = (_selectionActionLabel ??
+              promptService.getTextActionLabel(languageCode))
+          .trim()
+          .isEmpty
+          ? promptService.getTextActionLabel(languageCode)
+          : (_selectionActionLabel ?? promptService.getTextActionLabel(languageCode));
+      final promptTemplate = _selectionActionPrompt ??
+          promptService.getTextActionPrompt(languageCode);
+
+      if (mounted) {
+        setState(() {
+          _selectionActionLabel = label;
+          _selectionActionPrompt = promptTemplate;
+        });
+      }
+
+      final formattedPrompt = promptService.formatPrompt(
+        promptTemplate,
+        text: trimmed,
+        languageName: languageName,
+      );
+
+      final response = await _summaryService!.runCustomPrompt(
+        formattedPrompt,
+        languageCode,
+      );
+
+      if (progressVisible && mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        progressVisible = false;
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      await _showSelectionResultDialog(
+        originalText: trimmed,
+        generatedText: response.trim(),
+        actionLabel: label,
+      );
+    } catch (e, stack) {
+      debugPrint('Error executing selection action: $e');
+      debugPrint('$stack');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(l10n.textSelectionActionError)),
+        );
+      }
+    } finally {
+      if (progressVisible && mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      if (mounted) {
+        setState(() {
+          _isProcessingSelection = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _showSelectionResultDialog({
+    required String originalText,
+    required String generatedText,
+    required String actionLabel,
+  }) async {
+    if (!mounted) return;
+    final l10n = AppLocalizations.of(context)!;
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520, maxHeight: 520),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          actionLabel,
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleLarge
+                              ?.copyWith(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    l10n.textSelectionSelectedTextLabel,
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surfaceVariant,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: SelectableText(originalText),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    l10n.textSelectionActionResultLabel,
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 220),
+                    child: SingleChildScrollView(
+                      child: SelectableText(generatedText),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -1154,6 +1418,10 @@ class _PageContentView extends StatelessWidget {
     required this.maxHeight,
     required this.textHeightBehavior,
     required this.textScaler,
+    required this.actionLabel,
+    required this.onSelectionAction,
+    required this.onSelectionChanged,
+    required this.isProcessingAction,
   });
 
   final PageContent content;
@@ -1161,16 +1429,20 @@ class _PageContentView extends StatelessWidget {
   final double maxHeight;
   final TextHeightBehavior textHeightBehavior;
   final TextScaler textScaler;
+  final String actionLabel;
+  final ValueChanged<String>? onSelectionAction;
+  final ValueChanged<bool>? onSelectionChanged;
+  final bool isProcessingAction;
 
   @override
   Widget build(BuildContext context) {
     final children = <Widget>[];
-    
+
     for (final block in content.blocks) {
       if (block.spacingBefore > 0) {
         children.add(SizedBox(height: block.spacingBefore));
       }
-      
+
       if (block is TextPageBlock) {
         children.add(
           Text(
@@ -1194,18 +1466,39 @@ class _PageContentView extends StatelessWidget {
           ),
         );
       }
-      
+
       if (block.spacingAfter > 0) {
         children.add(SizedBox(height: block.spacingAfter));
       }
     }
 
-    // No scroll view - pagination engine should prevent overflow
-    // Make page content ignore pointer events so taps pass through to parent GestureDetector
-    return IgnorePointer(
-      child: SizedBox(
-        width: maxWidth,
-        height: maxHeight,
+    return SizedBox(
+      width: maxWidth,
+      height: maxHeight,
+      child: SelectionArea(
+        contextMenuBuilder: (context, delegate) {
+          final items = delegate.contextMenuButtonItems.toList();
+          final selectedText = delegate.selectedText.trim();
+          if (selectedText.isNotEmpty && onSelectionAction != null && !isProcessingAction) {
+            items.add(
+              ContextMenuButtonItem(
+                onPressed: () {
+                  delegate.hideToolbar();
+                  onSelectionAction?.call(delegate.selectedText);
+                },
+                label: actionLabel,
+              ),
+            );
+          }
+          return AdaptiveTextSelectionToolbar.buttonItems(
+            anchors: delegate.contextMenuAnchors,
+            buttonItems: items,
+          );
+        },
+        onSelectionChanged: (selection) {
+          final selected = selection.selectedContent?.plainText ?? '';
+          onSelectionChanged?.call(selected.trim().isNotEmpty);
+        },
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisAlignment: MainAxisAlignment.center,

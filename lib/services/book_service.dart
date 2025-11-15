@@ -232,6 +232,16 @@ class BookService {
     }
   }
 
+  Future<Book?> getBookById(String bookId) async {
+    if (bookId.isEmpty) return null;
+    final books = await getAllBooks();
+    try {
+      return books.firstWhere((book) => book.id == bookId);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _saveBook(Book book) async {
     try {
       final prefs = await SharedPreferences.getInstance();

@@ -70,6 +70,12 @@ class AppLocalizationsFr extends AppLocalizations {
   String get refresh => 'Actualiser';
 
   @override
+  String get libraryShowGrid => 'Vue grille';
+
+  @override
+  String get libraryShowList => 'Vue liste';
+
+  @override
   String get retry => 'Réessayer';
 
   @override
@@ -210,6 +216,50 @@ class AppLocalizationsFr extends AppLocalizations {
   @override
   String get promptSettingsDescription =>
       'Personnalisez les prompts utilisés pour la génération de résumés. Vous pouvez utiliser des placeholders dans vos prompts : text (pour le texte à résumer), bookTitle (pour le titre du livre), et chapterTitle (pour le titre du chapitre). Écrivez-les avec des accolades dans vos prompts.';
+
+  @override
+  String get textSelectionActionSettings => 'Action de sélection de texte';
+
+  @override
+  String get textSelectionActionDescription =>
+      'Personnalisez l\'action affichée lors de la sélection de texte. Vous pouvez utiliser {text} pour le texte sélectionné et {language} pour la langue de l\'application.';
+
+  @override
+  String get textSelectionActionLabelFr => 'Libellé de l\'action (français)';
+
+  @override
+  String get textSelectionActionLabelEn => 'Libellé de l\'action (anglais)';
+
+  @override
+  String get textSelectionActionPromptFr => 'Invite de l\'action (français)';
+
+  @override
+  String get textSelectionActionPromptEn => 'Invite de l\'action (anglais)';
+
+  @override
+  String get textSelectionActionProcessing => 'Traitement de la sélection...';
+
+  @override
+  String get textSelectionActionError => 'Impossible de traiter le texte sélectionné.';
+
+  @override
+  String get textSelectionSelectedTextLabel => 'Texte sélectionné';
+
+  @override
+  String get textSelectionActionResultLabel => 'Réponse';
+
+  @override
+  String get textSelectionDefaultLabel => 'Traduire';
+
+  @override
+  String get summaryConfigurationRequiredTitle => 'Configuration requise';
+
+  @override
+  String get summaryConfigurationRequiredBody =>
+      'Pour utiliser cette fonctionnalité, vous devez configurer un fournisseur d\'IA dans les paramètres. Voulez-vous ouvrir les paramètres maintenant ?';
+
+  @override
+  String get appLanguageName => 'Français';
 
   @override
   String get chunkSummaryPrompt => 'Prompt de résumé de chunk';

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:memoreader/l10n/app_localizations.dart';
@@ -6,6 +7,7 @@ import '../models/book.dart';
 import '../models/reading_progress.dart';
 import '../services/book_service.dart';
 import '../services/background_summary_service.dart';
+import '../services/app_state_service.dart';
 import 'reader_screen.dart';
 import 'settings_screen.dart';
 
@@ -18,17 +20,20 @@ class LibraryScreen extends StatefulWidget {
 
 class _LibraryScreenState extends State<LibraryScreen> {
   final BookService _bookService = BookService();
+  final AppStateService _appStateService = AppStateService();
   List<Book> _books = [];
   Map<String, ReadingProgress> _bookProgress = {}; // Map bookId to progress
   Map<String, int> _bookTotalChapters = {}; // Cache total chapters per book
   bool _isLoading = true;
   bool _isImporting = false;
   String? _errorMessage;
+  bool _isListView = false;
 
   @override
   void initState() {
     super.initState();
     _loadBooks();
+    unawaited(_appStateService.clearLastOpenedBook());
   }
 
   Future<void> _loadBooks() async {
@@ -193,6 +198,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   void _openBook(Book book) {
+    unawaited(_appStateService.setLastOpenedBook(book.id));
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -202,7 +208,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
       // User returned from reading a book
       // Reload books to refresh progress first
       await _loadBooks();
-      
+
+      await _appStateService.clearLastOpenedBook();
+
       // Generate summaries for the book that was just read (if it has progress)
       // Use fresh progress after reload
       final progress = _bookProgress[book.id];
@@ -227,7 +235,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   ) {
     final appLocale = Localizations.localeOf(context);
     final languageCode = appLocale.languageCode;
-    
+
     for (final book in books) {
       final progress = progressMap[book.id];
       if (progress != null && progress.currentChapterIndex != null && progress.currentChapterIndex! > 0) {
@@ -240,6 +248,340 @@ class _LibraryScreenState extends State<LibraryScreen> {
         );
       }
     }
+  }
+
+  Widget _buildBooksGrid(AppLocalizations l10n) {
+    return GridView.builder(
+      padding: const EdgeInsets.all(16),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 16,
+        childAspectRatio: 0.7,
+      ),
+      itemCount: _books.length,
+      itemBuilder: (context, index) {
+        final book = _books[index];
+        return _buildDismissibleBookItem(
+          book: book,
+          index: index,
+          l10n: l10n,
+          child: _buildGridBookCard(book, index, l10n),
+        );
+      },
+    );
+  }
+
+  Widget _buildBooksList(AppLocalizations l10n) {
+    return ListView.separated(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      itemBuilder: (context, index) {
+        final book = _books[index];
+        return _buildDismissibleBookItem(
+          book: book,
+          index: index,
+          l10n: l10n,
+          child: _buildListBookCard(book, index, l10n),
+        );
+      },
+      separatorBuilder: (context, index) => const SizedBox(height: 16),
+      itemCount: _books.length,
+    );
+  }
+
+  Widget _buildDismissibleBookItem({
+    required Book book,
+    required int index,
+    required AppLocalizations l10n,
+    required Widget child,
+  }) {
+    return Dismissible(
+      key: Key('${book.id}_${_isListView ? 'list' : 'grid'}'),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        decoration: BoxDecoration(
+          color: Colors.red,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Icon(Icons.delete, color: Colors.white),
+      ),
+      confirmDismiss: (_) => _confirmBookDismiss(book, l10n),
+      onDismissed: (_) {
+        unawaited(_deleteBookFromLibrary(book, l10n));
+      },
+      child: child,
+    );
+  }
+
+  Future<bool> _confirmBookDismiss(Book book, AppLocalizations l10n) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.deleteBook),
+        content: Text(l10n.confirmDeleteBook(book.title)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(l10n.cancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: Text(l10n.delete),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  Future<void> _deleteBookFromLibrary(Book book, AppLocalizations l10n) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _bookService.deleteBook(book);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(l10n.bookDeleted(book.title)),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      await _loadBooks();
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(l10n.errorDeletingBook(e.toString())),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Widget _buildGridBookCard(Book book, int index, AppLocalizations l10n) {
+    final progressInfo = _getProgressInfo(book);
+    return Card(
+      elevation: 2,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        onTap: () => _openBook(book),
+        onLongPress: () => _showDeleteDialog(book, index),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            _buildCoverImage(book),
+            if (_isBookCompleted(book))
+              Positioned.fill(
+                child: _buildReadWatermark(),
+              ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: _buildBookMenu(book, l10n, onDarkBackground: true),
+            ),
+            _buildGridInfoOverlay(book, progressInfo),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGridInfoOverlay(Book book, _ProgressInfo? progressInfo) {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.black.withOpacity(0.0),
+              Colors.black.withOpacity(0.55),
+            ],
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              book.title,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              book.author,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (progressInfo != null) ...[
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: progressInfo.value,
+                  minHeight: 6,
+                  backgroundColor: Colors.white24,
+                  valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${progressInfo.label}%',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildListBookCard(Book book, int index, AppLocalizations l10n) {
+    final progressInfo = _getProgressInfo(book);
+    final theme = Theme.of(context);
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _openBook(book),
+        onLongPress: () => _showDeleteDialog(book, index),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 90,
+                height: 130,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      _buildCoverImage(book),
+                      if (_isBookCompleted(book))
+                        Positioned.fill(child: _buildReadWatermark()),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      book.title,
+                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      book.author,
+                      style: theme.textTheme.bodyMedium?.copyWith(color: Colors.grey[700]),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (progressInfo != null) ...[
+                      const SizedBox(height: 12),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: progressInfo.value,
+                          minHeight: 6,
+                          backgroundColor: theme.colorScheme.surfaceVariant,
+                          valueColor: AlwaysStoppedAnimation<Color>(theme.colorScheme.primary),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${progressInfo.label}%',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              _buildBookMenu(book, l10n),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCoverImage(Book book) {
+    if (book.coverImagePath != null && book.coverImagePath!.isNotEmpty) {
+      return Image.file(
+        File(book.coverImagePath!),
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          debugPrint('Error loading cover image: $error');
+          return _buildDefaultCover(book);
+        },
+      );
+    }
+    return _buildDefaultCover(book);
+  }
+
+  Widget _buildBookMenu(Book book, AppLocalizations l10n, {bool onDarkBackground = false}) {
+    final backgroundColor = onDarkBackground ? Colors.black.withOpacity(0.45) : Colors.white.withOpacity(0.9);
+    final iconColor = onDarkBackground ? Colors.white : Colors.black87;
+    return PopupMenuButton<String>(
+      icon: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: backgroundColor,
+          shape: BoxShape.circle,
+        ),
+        child: Icon(
+          Icons.more_vert,
+          size: 18,
+          color: iconColor,
+        ),
+      ),
+      onSelected: (value) {
+        if (value == 'delete') {
+          _showDeleteConfirmationDialog(book);
+        }
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem<String>(
+          value: 'delete',
+          child: Row(
+            children: [
+              const Icon(Icons.delete, size: 20),
+              const SizedBox(width: 8),
+              Text(l10n.delete),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   void _showDeleteDialog(Book book, int index) {
@@ -361,6 +703,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
           ),
           if (_books.isNotEmpty)
             IconButton(
+              icon: Icon(_isListView ? Icons.grid_view : Icons.view_list),
+              onPressed: () {
+                setState(() {
+                  _isListView = !_isListView;
+                });
+              },
+              tooltip: _isListView ? l10n.libraryShowGrid : l10n.libraryShowList,
+            ),
+          if (_books.isNotEmpty)
+            IconButton(
               icon: const Icon(Icons.refresh),
               onPressed: _loadBooks,
               tooltip: l10n.refresh,
@@ -421,212 +773,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     )
                   : RefreshIndicator(
                       onRefresh: _loadBooks,
-                      child: GridView.builder(
-                        padding: const EdgeInsets.all(16),
-                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2,
-                          crossAxisSpacing: 16,
-                          mainAxisSpacing: 16,
-                          childAspectRatio: 0.7,
-                        ),
-                        itemCount: _books.length,
-                        itemBuilder: (context, index) {
-                          final book = _books[index];
-                          return Dismissible(
-                            key: Key(book.id),
-                            direction: DismissDirection.endToStart,
-                            background: Container(
-                              alignment: Alignment.centerRight,
-                              padding: const EdgeInsets.only(right: 20),
-                              decoration: BoxDecoration(
-                                color: Colors.red,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: const Icon(Icons.delete, color: Colors.white),
-                            ),
-                            onDismissed: (direction) {
-                              final messenger = ScaffoldMessenger.of(context);
-                              final l10n = AppLocalizations.of(context)!;
-                              _bookService.deleteBook(book).then((_) {
-                                if (mounted) {
-                                  _loadBooks();
-                                }
-                              }).catchError((e) {
-                                if (mounted) {
-                                  messenger.showSnackBar(
-                                    SnackBar(
-                                      content: Text(l10n.errorDeletingBook(e.toString())),
-                                      backgroundColor: Colors.red,
-                                    ),
-                                  );
-                                }
-                              });
-                            },
-                            confirmDismiss: (direction) async {
-                              final l10n = AppLocalizations.of(context)!;
-                              final messenger = ScaffoldMessenger.of(context);
-                              final result = await showDialog<bool>(
-                                context: context,
-                                builder: (context) => AlertDialog(
-                                  title: Text(l10n.deleteBook),
-                                  content: Text(l10n.confirmDeleteBook(book.title)),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, false),
-                                      child: Text(l10n.cancel),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, true),
-                                      style: TextButton.styleFrom(foregroundColor: Colors.red),
-                                      child: Text(l10n.delete),
-                                    ),
-                                  ],
-                                ),
-                              );
-                              if (result == true) {
-                                try {
-                                  await _bookService.deleteBook(book);
-                                  if (mounted) {
-                                    messenger.showSnackBar(
-                                      SnackBar(
-                                        content: Text(l10n.bookDeleted(book.title)),
-                                        duration: const Duration(seconds: 2),
-                                      ),
-                                    );
-                                    _loadBooks();
-                                  }
-                                } catch (e) {
-                                  if (mounted) {
-                                    messenger.showSnackBar(
-                                      SnackBar(
-                                        content: Text(l10n.errorDeletingBook(e.toString())),
-                                        backgroundColor: Colors.red,
-                                      ),
-                                    );
-                                  }
-                                }
-                              }
-                              return result ?? false;
-                            },
-                            child: InkWell(
-                              onTap: () => _openBook(book),
-                              onLongPress: () => _showDeleteDialog(book, index),
-                              child: Card(
-                                elevation: 2,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                                  children: [
-                                    Expanded(
-                                      child: Stack(
-                                        fit: StackFit.expand,
-                                        children: [
-                                          // Book cover
-                                          Container(
-                                            decoration: BoxDecoration(
-                                              color: Colors.grey[200],
-                                              borderRadius: const BorderRadius.vertical(
-                                                top: Radius.circular(8),
-                                              ),
-                                            ),
-                                            child: book.coverImagePath != null && book.coverImagePath!.isNotEmpty
-                                                ? ClipRRect(
-                                                    borderRadius: const BorderRadius.vertical(
-                                                      top: Radius.circular(8),
-                                                    ),
-                                                    child: Image.file(
-                                                      File(book.coverImagePath!),
-                                                      fit: BoxFit.cover,
-                                                      errorBuilder: (context, error, stackTrace) {
-                                                        debugPrint('Error loading cover image: $error');
-                                                        return _buildDefaultCover(book);
-                                                      },
-                                                    ),
-                                                  )
-                                                : _buildDefaultCover(book),
-                                          ),
-                                          // READ watermark for completed books
-                                          if (_isBookCompleted(book))
-                                            Positioned.fill(
-                                              child: _buildReadWatermark(),
-                                            ),
-                                          // Burger menu button at top right
-                                          Positioned(
-                                            top: 8,
-                                            right: 8,
-                                            child: PopupMenuButton<String>(
-                                              icon: Container(
-                                                padding: const EdgeInsets.all(4),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.white.withValues(alpha: 0.9),
-                                                  shape: BoxShape.circle,
-                                                ),
-                                                child: const Icon(
-                                                  Icons.more_vert,
-                                                  size: 18,
-                                                  color: Colors.black87,
-                                                ),
-                                              ),
-                                              onSelected: (value) {
-                                                if (value == 'delete') {
-                                                  _showDeleteConfirmationDialog(book);
-                                                }
-                                              },
-                                              itemBuilder: (context) => [
-                                                PopupMenuItem<String>(
-                                                  value: 'delete',
-                                                  child: Row(
-                                                    children: [
-                                                      const Icon(Icons.delete, size: 20),
-                                                      const SizedBox(width: 8),
-                                                      Text(l10n.delete),
-                                                    ],
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    Padding(
-                                      padding: const EdgeInsets.all(8.0),
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            book.title,
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 14,
-                                            ),
-                                            maxLines: 2,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            book.author,
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.grey[600],
-                                            ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          // Progress bar below author name
-                                          _buildProgressIndicator(book),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
+                      child: _isListView
+                          ? _buildBooksList(l10n)
+                          : _buildBooksGrid(l10n),
                     ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _isImporting ? null : _importEpub,
@@ -677,21 +826,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Widget _buildProgressIndicator(Book book) {
-    final progress = _bookProgress[book.id];
-
-    if (progress == null) {
+    final info = _getProgressInfo(book);
+    if (info == null) {
       return const SizedBox.shrink();
     }
-
-    double progressValue = progress.progress ??
-        _calculateLegacyProgress(book, progress);
-    progressValue = progressValue.clamp(0.0, 1.0);
-
-    if (progressValue <= 0.0) {
-      return const SizedBox.shrink();
-    }
-
-    final progressPercentage = (progressValue * 100).toStringAsFixed(0);
 
     return Padding(
       padding: const EdgeInsets.only(top: 8),
@@ -705,7 +843,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(4),
                   child: LinearProgressIndicator(
-                    value: progressValue,
+                    value: info.value,
                     minHeight: 6,
                     backgroundColor: Colors.grey[200],
                     valueColor: AlwaysStoppedAnimation<Color>(
@@ -716,7 +854,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
               ),
               const SizedBox(width: 8),
               Text(
-                '$progressPercentage%',
+                '${info.label}%',
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
@@ -728,6 +866,24 @@ class _LibraryScreenState extends State<LibraryScreen> {
         ],
       ),
     );
+  }
+
+  _ProgressInfo? _getProgressInfo(Book book) {
+    final progress = _bookProgress[book.id];
+    if (progress == null) {
+      return null;
+    }
+
+    double progressValue = progress.progress ??
+        _calculateLegacyProgress(book, progress);
+    progressValue = progressValue.clamp(0.0, 1.0);
+
+    if (progressValue <= 0.0) {
+      return null;
+    }
+
+    final progressPercentage = (progressValue * 100).toStringAsFixed(0);
+    return _ProgressInfo(value: progressValue, label: progressPercentage);
   }
 
   double _calculateLegacyProgress(Book book, ReadingProgress progress) {
@@ -794,4 +950,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ),
     );
   }
+}
+
+class _ProgressInfo {
+  const _ProgressInfo({required this.value, required this.label});
+
+  final double value;
+  final String label;
 }

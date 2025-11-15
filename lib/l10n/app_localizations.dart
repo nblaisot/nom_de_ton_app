@@ -200,6 +200,18 @@ abstract class AppLocalizations {
   /// **'Refresh'**
   String get refresh;
 
+  /// Tooltip for switching to the grid view
+  ///
+  /// In en, this message translates to:
+  /// **'Grid view'**
+  String get libraryShowGrid;
+
+  /// Tooltip for switching to the list view
+  ///
+  /// In en, this message translates to:
+  /// **'List view'**
+  String get libraryShowList;
+
   /// Retry button label
   ///
   /// In en, this message translates to:
@@ -433,6 +445,90 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Customize the prompts used for summary generation. You can use placeholders in your prompts: text (for the text to summarize), bookTitle (for the book title), and chapterTitle (for the chapter title). Write them with curly braces in your prompts.'**
   String get promptSettingsDescription;
+
+  /// Section title for configuring the reader selection action
+  ///
+  /// In en, this message translates to:
+  /// **'Text selection action'**
+  String get textSelectionActionSettings;
+
+  /// Description for the reader selection action section
+  ///
+  /// In en, this message translates to:
+  /// **'Customize the action displayed when selecting text. You can use {text} for the selected text and {language} for the application language.'**
+  String get textSelectionActionDescription;
+
+  /// Label for the French selection action name
+  ///
+  /// In en, this message translates to:
+  /// **'Action label (French)'**
+  String get textSelectionActionLabelFr;
+
+  /// Label for the English selection action name
+  ///
+  /// In en, this message translates to:
+  /// **'Action label (English)'**
+  String get textSelectionActionLabelEn;
+
+  /// Editor label for the French selection action prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Action prompt (French)'**
+  String get textSelectionActionPromptFr;
+
+  /// Editor label for the English selection action prompt
+  ///
+  /// In en, this message translates to:
+  /// **'Action prompt (English)'**
+  String get textSelectionActionPromptEn;
+
+  /// Message shown while the selection action is running
+  ///
+  /// In en, this message translates to:
+  /// **'Processing selection...'**
+  String get textSelectionActionProcessing;
+
+  /// Error message when the selection action fails
+  ///
+  /// In en, this message translates to:
+  /// **'Unable to process the selected text.'**
+  String get textSelectionActionError;
+
+  /// Label shown above the selected text in the action dialog
+  ///
+  /// In en, this message translates to:
+  /// **'Selected text'**
+  String get textSelectionSelectedTextLabel;
+
+  /// Label shown above the generated response in the action dialog
+  ///
+  /// In en, this message translates to:
+  /// **'Response'**
+  String get textSelectionActionResultLabel;
+
+  /// Default label for the selection action button
+  ///
+  /// In en, this message translates to:
+  /// **'Translate'**
+  String get textSelectionDefaultLabel;
+
+  /// Dialog title when summary service is missing
+  ///
+  /// In en, this message translates to:
+  /// **'Configuration required'**
+  String get summaryConfigurationRequiredTitle;
+
+  /// Dialog body when summary service is missing
+  ///
+  /// In en, this message translates to:
+  /// **'To use this feature you need to configure an AI provider in the settings. Would you like to open the settings now?'**
+  String get summaryConfigurationRequiredBody;
+
+  /// Display name of the current language
+  ///
+  /// In en, this message translates to:
+  /// **'English'**
+  String get appLanguageName;
 
   /// Label for chunk summary prompt
   ///
