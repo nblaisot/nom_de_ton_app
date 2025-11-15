@@ -350,7 +350,9 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     });
   }
 
-  void _handleTapDown(TapDownDetails details) {
+  void _handleTapUp(TapUpDetails details) {
+    // Trigger page/menu/progress actions when the tap is released to avoid
+    // accidental activations from other gestures while keeping taps snappy.
     if (_hasActiveSelection) {
       // Clear selection by deselecting
       setState(() {
@@ -715,11 +717,12 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
             itemBuilder: (context, index) => pages[index],
           ),
           // GestureDetector that covers the entire screen to catch taps
-          // Use onTapDown for immediate response (not onTapUp which waits for tap completion)
+          // Actions are dispatched on tap up so the entire single-tap gesture
+          // completes before navigation/menu toggles run.
           Positioned.fill(
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
-              onTapDown: _handleTapDown,
+              onTapUp: _handleTapUp,
               child: Container(color: Colors.transparent),
             ),
           ),
