@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import '../../utils/text_tokenizer.dart';
 import 'document_model.dart';
@@ -12,19 +14,21 @@ class LineMetricsPaginationEngine {
     required double maxWidth,
     required double maxHeight,
     required TextHeightBehavior textHeightBehavior,
+    required TextScaler textScaler,
   })  : _blocks = blocks,
         _baseTextStyle = baseTextStyle,
         _maxWidth = maxWidth,
         _originalMaxHeight = maxHeight,
         _maxHeight = maxHeight,
-        _textHeightBehavior = textHeightBehavior {
+        _textHeightBehavior = textHeightBehavior,
+        _textScaler = textScaler {
     _buildPages();
   }
-  
-  // Safety margins matching cosmos_epub approach
-  // cosmos_epub uses 100px when finding break point, 150px when resetting page bottom
-  static const double _breakPointMargin = 100.0;  // Margin when finding break point
-  static const double _pageBottomMargin = 150.0;  // Margin when resetting page bottom (matching cosmos_epub)
+
+  static const double _minBreakPointMargin = 24.0;
+  static const double _maxBreakPointMargin = 80.0;
+  static const double _minPageBottomMargin = 48.0;
+  static const double _maxBottomMarginFraction = 0.18;
 
   final List<DocumentBlock> _blocks;
   final TextStyle _baseTextStyle;
@@ -32,6 +36,7 @@ class LineMetricsPaginationEngine {
   final double _originalMaxHeight;  // Store original for page bottom calculations
   final double _maxHeight;  // Effective max height (same as original for now)
   final TextHeightBehavior _textHeightBehavior;
+  final TextScaler _textScaler;
 
   late final List<PageContent> _pages;
   int _totalCharacters = 0;
@@ -45,6 +50,7 @@ class LineMetricsPaginationEngine {
     required double maxWidth,
     required double maxHeight,
     required TextHeightBehavior textHeightBehavior,
+    required TextScaler textScaler,
   }) {
     return identical(_blocks, blocks) &&
         (_baseTextStyle.fontSize ?? 16) == (baseStyle.fontSize ?? 16) &&
@@ -55,7 +61,8 @@ class LineMetricsPaginationEngine {
         _textHeightBehavior.applyHeightToFirstAscent ==
             textHeightBehavior.applyHeightToFirstAscent &&
         _textHeightBehavior.applyHeightToLastDescent ==
-            textHeightBehavior.applyHeightToLastDescent;
+            textHeightBehavior.applyHeightToLastDescent &&
+        _textScaler == textScaler;
   }
 
   /// Get a page by index
@@ -177,6 +184,7 @@ class LineMetricsPaginationEngine {
       textAlign: block.textAlign,
       textDirection: TextDirection.ltr,
       textHeightBehavior: _textHeightBehavior,
+      textScaler: _textScaler,
     );
     textPainter.layout(maxWidth: _maxWidth);
 
@@ -188,9 +196,14 @@ class LineMetricsPaginationEngine {
     final spacingBefore = isFirstBlock ? 0.0 : block.spacingBefore;
     final spacingAfter = block.spacingAfter;
 
+    final pageBottomMargin = _computePageBottomMargin(
+      textPainter.preferredLineHeight,
+      spacingAfter,
+    );
+
     // Match cosmos_epub approach: track cumulative height and use safety margins
     // Use effective max height with safety margin applied
-    final effectiveMaxHeight = _originalMaxHeight - _pageBottomMargin;
+    final effectiveMaxHeight = _originalMaxHeight - pageBottomMargin;
     double currentPageHeight = spacingBefore;
     int currentPageStartCharIndex = startCharIndex;
     int currentPageStartTextIndex = 0;
@@ -217,6 +230,7 @@ class LineMetricsPaginationEngine {
     for (int lineIndex = 0; lineIndex < lines.length; lineIndex++) {
       final line = lines[lineIndex];
       final lineHeight = line.height;
+      final breakPointMargin = _computeBreakPointMargin(lineHeight);
       final left = line.left;
       final top = line.baseline - line.ascent;
       
@@ -234,7 +248,7 @@ class LineMetricsPaginationEngine {
       if (totalHeightWithLine > effectiveMaxHeight && currentPageStartTextIndex < lineStartOffset) {
         // Break BEFORE the line that would overflow (matching cosmos_epub)
         // Find break point by subtracting breakPointMargin from line top
-        final breakPointTop = (top - _breakPointMargin).clamp(0.0, double.infinity);
+        final breakPointTop = (top - breakPointMargin).clamp(0.0, double.infinity);
         final breakPointOffset = textPainter.getPositionForOffset(Offset(left, breakPointTop)).offset;
 
         final targetBreakOffset = breakPointOffset > currentPageStartTextIndex
@@ -274,26 +288,39 @@ class LineMetricsPaginationEngine {
         }
 
         if (safeBreakOffset > currentPageStartTextIndex) {
-          final pageText = text.substring(
-            currentPageStartTextIndex,
-            safeBreakOffset,
+          final fitResult = _shrinkToFit(
+            text: text,
+            startOffset: currentPageStartTextIndex,
+            endOffset: safeBreakOffset,
+            startTokenPointer: currentPageStartTokenIndex,
+            endTokenPointerExclusive: pageEndTokenPointerExclusive,
+            spacingBefore: currentPageStartTextIndex == 0 ? spacingBefore : 0.0,
+            spacingAfter: 0.0,
+            textStyle: textStyle,
+            textAlign: block.textAlign,
+            availableHeight: effectiveMaxHeight,
+            tokenSpans: tokenSpans,
           );
+
+          if (fitResult == null || fitResult.text.isEmpty) {
+            continue;
+          }
 
           final pageStartTokenPointer = currentPageStartTokenIndex;
           final tokensInPage =
-              pageEndTokenPointerExclusive - pageStartTokenPointer;
+              fitResult.endTokenPointerExclusive - pageStartTokenPointer;
           final startWordPointer = startWordIndex + pageStartTokenPointer;
           final endWordPointer = tokensInPage > 0
               ? startWordPointer + tokensInPage - 1
               : startWordPointer - 1;
 
           final page = _createTextPage(
-            pageText,
+            fitResult.text,
             textStyle,
             block.textAlign,
             block.chapterIndex,
             currentPageStartCharIndex,
-            currentPageStartCharIndex + pageText.length - 1,
+            currentPageStartCharIndex + fitResult.text.length - 1,
             startWordPointer,
             endWordPointer,
             currentPageStartTextIndex == 0 ? spacingBefore : 0.0,
@@ -302,9 +329,9 @@ class LineMetricsPaginationEngine {
           pages.add(page);
 
           // Start new page
-          currentPageStartCharIndex += pageText.length;
-          currentPageStartTextIndex = safeBreakOffset;
-          currentPageStartTokenIndex = pageEndTokenPointerExclusive;
+          currentPageStartCharIndex += fitResult.text.length;
+          currentPageStartTextIndex = fitResult.endOffset;
+          currentPageStartTokenIndex = fitResult.endTokenPointerExclusive;
           currentPageHeight = 0.0;
         }
       }
@@ -314,25 +341,36 @@ class LineMetricsPaginationEngine {
 
       // If this is the last line, finalize the page
       if (isLastLine) {
-        final pageText = text.substring(currentPageStartTextIndex);
+        final fitResult = _shrinkToFit(
+          text: text,
+          startOffset: currentPageStartTextIndex,
+          endOffset: text.length,
+          startTokenPointer: currentPageStartTokenIndex,
+          endTokenPointerExclusive: tokenSpans.length,
+          spacingBefore: currentPageStartTextIndex == 0 ? spacingBefore : 0.0,
+          spacingAfter: spacingAfter,
+          textStyle: textStyle,
+          textAlign: block.textAlign,
+          availableHeight: effectiveMaxHeight,
+          tokenSpans: tokenSpans,
+        );
 
-        if (pageText.isNotEmpty) {
+        if (fitResult != null && fitResult.text.isNotEmpty) {
           final pageStartTokenPointer = currentPageStartTokenIndex;
-          final pageEndTokenPointerExclusive = tokenSpans.length;
           final tokensInPage =
-              pageEndTokenPointerExclusive - pageStartTokenPointer;
+              fitResult.endTokenPointerExclusive - pageStartTokenPointer;
           final startWordPointer = startWordIndex + pageStartTokenPointer;
           final endWordPointer = tokensInPage > 0
               ? startWordPointer + tokensInPage - 1
               : startWordPointer - 1;
 
           pages.add(_createTextPage(
-            pageText,
+            fitResult.text,
             textStyle,
             block.textAlign,
             block.chapterIndex,
             currentPageStartCharIndex,
-            currentPageStartCharIndex + pageText.length - 1,
+            currentPageStartCharIndex + fitResult.text.length - 1,
             startWordPointer,
             endWordPointer,
             currentPageStartTextIndex == 0 ? spacingBefore : 0.0,
@@ -343,6 +381,100 @@ class LineMetricsPaginationEngine {
     }
 
     return pages;
+  }
+
+  double _computeBreakPointMargin(double lineHeight) {
+    final target = lineHeight * 0.75;
+    return target.clamp(_minBreakPointMargin, _maxBreakPointMargin);
+  }
+
+  double _computePageBottomMargin(double lineHeight, double spacingAfter) {
+    final dynamicMargin = lineHeight + spacingAfter;
+    final upperBound = _originalMaxHeight * _maxBottomMarginFraction;
+    final effectiveUpperBound = math.max(_minPageBottomMargin, upperBound);
+    return dynamicMargin.clamp(_minPageBottomMargin, effectiveUpperBound);
+  }
+
+  _FitResult? _shrinkToFit({
+    required String text,
+    required int startOffset,
+    required int endOffset,
+    required int startTokenPointer,
+    required int endTokenPointerExclusive,
+    required double spacingBefore,
+    required double spacingAfter,
+    required TextStyle textStyle,
+    required TextAlign textAlign,
+    required double availableHeight,
+    required List<TextTokenSpan> tokenSpans,
+  }) {
+    int currentEndOffset = endOffset;
+    int currentEndTokenPointerExclusive = endTokenPointerExclusive;
+
+    while (currentEndOffset > startOffset) {
+      final pageText = text.substring(startOffset, currentEndOffset);
+      if (_fitsWithinHeight(
+        pageText: pageText,
+        spacingBefore: spacingBefore,
+        spacingAfter: spacingAfter,
+        textStyle: textStyle,
+        textAlign: textAlign,
+        availableHeight: availableHeight,
+      )) {
+        return _FitResult(
+          text: pageText,
+          endOffset: currentEndOffset,
+          endTokenPointerExclusive: currentEndTokenPointerExclusive,
+        );
+      }
+
+      if (currentEndTokenPointerExclusive <= startTokenPointer) {
+        break;
+      }
+
+      currentEndTokenPointerExclusive -= 1;
+      currentEndOffset = currentEndTokenPointerExclusive > startTokenPointer
+          ? tokenSpans[currentEndTokenPointerExclusive - 1].end
+          : startOffset;
+    }
+
+    return null;
+  }
+
+  bool _fitsWithinHeight({
+    required String pageText,
+    required double spacingBefore,
+    required double spacingAfter,
+    required TextStyle textStyle,
+    required TextAlign textAlign,
+    required double availableHeight,
+  }) {
+    if (pageText.isEmpty) {
+      return true;
+    }
+
+    final textPainter = TextPainter(
+      text: TextSpan(text: pageText, style: textStyle),
+      textAlign: textAlign,
+      textDirection: TextDirection.ltr,
+      textHeightBehavior: _textHeightBehavior,
+      textScaler: _textScaler,
+    );
+    textPainter.layout(maxWidth: _maxWidth);
+
+    final lines = textPainter.computeLineMetrics();
+    if (lines.isEmpty) {
+      return true;
+    }
+
+    double totalHeight = spacingBefore;
+    for (final line in lines) {
+      totalHeight += line.height;
+    }
+    totalHeight += spacingAfter;
+
+    final roundedHeight = math.ceil(totalHeight).toDouble();
+    return roundedHeight <= availableHeight;
   }
 
   PageContent? _createImagePage(
@@ -421,5 +553,17 @@ class LineMetricsPaginationEngine {
       endCharIndex: endCharIndex,
     );
   }
+}
+
+class _FitResult {
+  const _FitResult({
+    required this.text,
+    required this.endOffset,
+    required this.endTokenPointerExclusive,
+  });
+
+  final String text;
+  final int endOffset;
+  final int endTokenPointerExclusive;
 }
 

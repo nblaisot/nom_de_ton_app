@@ -31,6 +31,8 @@ Page two follows with the same level of verbosity so that we can verify multiple
       baseTextStyle: baseStyle,
       maxWidth: 360,
       maxHeight: 320,
+      textHeightBehavior: const TextHeightBehavior(),
+      textScaler: const TextScaler.linear(1.0),
     );
 
     test('produces sequential pages without gaps or overlaps', () {
