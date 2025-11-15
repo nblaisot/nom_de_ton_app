@@ -1471,13 +1471,9 @@ class _PageContentView extends StatefulWidget {
 
 class _PageContentViewState extends State<_PageContentView> {
   String _selectedText = '';
-  final ContextMenuController _contextMenuController = ContextMenuController();
   int _selectionGeneration = 0;
 
   void _clearSelection() {
-    if (_contextMenuController.isShown) {
-      _contextMenuController.hide();
-    }
     setState(() {
       _selectedText = '';
       _selectionGeneration++;
@@ -1527,7 +1523,6 @@ class _PageContentViewState extends State<_PageContentView> {
       height: widget.maxHeight,
       child: SelectionArea(
         key: ValueKey(_selectionGeneration),
-        contextMenuController: _contextMenuController,
         contextMenuBuilder: (context, delegate) {
           final items = delegate.contextMenuButtonItems.toList();
           final trimmedText = _selectedText.trim();
@@ -1555,11 +1550,6 @@ class _PageContentViewState extends State<_PageContentView> {
             _selectedText = selected;
           });
           final hasSelection = selected.trim().isNotEmpty;
-          if (hasSelection && !_contextMenuController.isShown) {
-            _contextMenuController.show(context: context);
-          } else if (!hasSelection && _contextMenuController.isShown) {
-            _contextMenuController.hide();
-          }
           widget.onSelectionChanged?.call(hasSelection, _clearSelection);
         },
         child: Column(
