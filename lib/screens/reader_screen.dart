@@ -1596,7 +1596,8 @@ class _PageContentViewState extends State<_PageContentView> {
           final items = delegate.contextMenuButtonItems.toList();
           final trimmedText = _selectedText.trim();
           if (trimmedText.isNotEmpty && widget.onSelectionAction != null && !widget.isProcessingAction) {
-            items.add(
+            // Insérer l'action personnalisée au début du menu, au même niveau que "Copier" et "Tout sélectionner"
+            items.insert(0,
               ContextMenuButtonItem(
                 onPressed: () {
                   delegate.hideToolbar();
