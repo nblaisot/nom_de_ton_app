@@ -28,6 +28,8 @@ void main() {
         baseTextStyle: const TextStyle(fontSize: 18, height: 1.4),
         maxWidth: 400,
         maxHeight: 600,
+        textHeightBehavior: const TextHeightBehavior(),
+        textScaler: const TextScaler.linear(1.0),
       );
 
       expect(engine.totalPages, greaterThan(0));
@@ -56,6 +58,8 @@ void main() {
         baseTextStyle: const TextStyle(fontSize: 18, height: 1.4),
         maxWidth: 300,
         maxHeight: 400,
+        textHeightBehavior: const TextHeightBehavior(),
+        textScaler: const TextScaler.linear(1.0),
       );
 
       expect(engine.totalPages, greaterThan(0));
@@ -94,6 +98,8 @@ void main() {
         baseTextStyle: const TextStyle(fontSize: 18, height: 1.4),
         maxWidth: 400,
         maxHeight: 600,
+        textHeightBehavior: const TextHeightBehavior(),
+        textScaler: const TextScaler.linear(1.0),
       );
 
       final pageIndex = engine.findPageForChapter(1);

@@ -180,6 +180,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
       maxWidth: metrics.maxWidth,
       maxHeight: metrics.maxHeight,
       textHeightBehavior: metrics.textHeightBehavior,
+      textScaler: metrics.textScaler,
     );
 
     final totalPages = engine.totalPages;
@@ -251,6 +252,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
       maxHeight: maxHeight,
       baseTextStyle: baseStyle,
       textHeightBehavior: textHeightBehavior,
+      textScaler: MediaQuery.textScalerOf(context),
     );
   }
 
@@ -264,6 +266,7 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
       maxHeight: adjustedHeight,
       baseTextStyle: metrics.baseTextStyle,
       textHeightBehavior: metrics.textHeightBehavior,
+      textScaler: metrics.textScaler,
     );
   }
 
@@ -378,8 +381,8 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
         // Use LayoutBuilder to get actual widget size, especially important for foldable devices
         final actualSize = Size(constraints.maxWidth, constraints.maxHeight);
         _lastActualSize = actualSize;
-    final baseMetrics = _computePageMetrics(context, actualSize);
-    final metrics = _adjustForUserPadding(baseMetrics);
+        final baseMetrics = _computePageMetrics(context, actualSize);
+        final metrics = _adjustForUserPadding(baseMetrics);
         
         // Trigger repagination if size changed significantly
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -393,6 +396,7 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
                 maxWidth: currentMetrics.maxWidth,
                 maxHeight: currentMetrics.maxHeight,
                 textHeightBehavior: currentMetrics.textHeightBehavior,
+                textScaler: currentMetrics.textScaler,
               )) {
             _scheduleRepagination(retainCurrentPage: true, actualSize: actualSize);
           }
@@ -596,6 +600,7 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
             maxWidth: metrics.maxWidth,
             maxHeight: metrics.maxHeight,
             textHeightBehavior: metrics.textHeightBehavior,
+            textScaler: metrics.textScaler,
           ),
         ),
       ),
@@ -1028,12 +1033,14 @@ class _PageMetrics {
     required this.maxHeight,
     required this.baseTextStyle,
     required this.textHeightBehavior,
+    required this.textScaler,
   });
 
   final double maxWidth;
   final double maxHeight;
   final TextStyle baseTextStyle;
   final TextHeightBehavior textHeightBehavior;
+  final TextScaler textScaler;
 }
 
 class _PageContentView extends StatelessWidget {
@@ -1042,12 +1049,14 @@ class _PageContentView extends StatelessWidget {
     required this.maxWidth,
     required this.maxHeight,
     required this.textHeightBehavior,
+    required this.textScaler,
   });
 
   final PageContent content;
   final double maxWidth;
   final double maxHeight;
   final TextHeightBehavior textHeightBehavior;
+  final TextScaler textScaler;
 
   @override
   Widget build(BuildContext context) {
@@ -1066,6 +1075,7 @@ class _PageContentView extends StatelessWidget {
             textAlign: block.textAlign,
             softWrap: true,
             textHeightBehavior: textHeightBehavior,
+            textScaler: textScaler,
           ),
         );
       } else if (block is ImagePageBlock) {
