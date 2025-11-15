@@ -82,6 +82,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
   bool _hasActiveSelection = false;
   bool _isProcessingSelection = false;
   VoidCallback? _clearSelectionCallback;
+  DateTime? _lastSelectionChangeTimestamp;
   String? _selectionActionLabel;
   String? _selectionActionPrompt;
   Locale? _lastLocale;
@@ -355,9 +356,21 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     // Trigger page/menu/progress actions when the tap is released to avoid
     // accidental activations from other gestures while keeping taps snappy.
     if (_hasActiveSelection) {
+      final lastSelectionChange = _lastSelectionChangeTimestamp;
+      final shouldDeferClearing = lastSelectionChange != null &&
+          DateTime.now().difference(lastSelectionChange) <
+              const Duration(milliseconds: 250);
+
+      if (shouldDeferClearing) {
+        // Ignore the tap that ends an active selection gesture so the
+        // highlight stays visible and the context menu can be used.
+        return;
+      }
+
       // Clear selection by deselecting
       setState(() {
         _hasActiveSelection = false;
+        _lastSelectionChangeTimestamp = null;
       });
       _clearSelectionCallback?.call();
       _clearSelectionCallback = null;
@@ -395,8 +408,10 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
   void _handleSelectionChanged(bool hasSelection, VoidCallback clearSelection) {
     if (hasSelection) {
       _clearSelectionCallback = clearSelection;
+      _lastSelectionChangeTimestamp = DateTime.now();
     } else {
       _clearSelectionCallback = null;
+      _lastSelectionChangeTimestamp = null;
     }
 
     if (_hasActiveSelection != hasSelection) {
@@ -723,6 +738,8 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
             controller: _pageController,
             itemCount: pages.length,
             onPageChanged: _handlePageChanged,
+            physics:
+                _hasActiveSelection ? const NeverScrollableScrollPhysics() : null,
             itemBuilder: (context, index) => pages[index],
           ),
           // GestureDetector that covers the entire screen to catch taps
@@ -1003,6 +1020,7 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     setState(() {
       _isProcessingSelection = true;
       _hasActiveSelection = false;
+      _lastSelectionChangeTimestamp = null;
     });
 
     final l10n = AppLocalizations.of(context)!;
