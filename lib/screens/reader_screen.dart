@@ -804,6 +804,7 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
                       TapUpDetails(
                         globalPosition: event.position,
                         localPosition: event.localPosition,
+                        kind: event.kind,
                       ),
                     );
                   }
