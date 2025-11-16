@@ -61,26 +61,6 @@ class _PreparedTextData {
   final List<_ChunkDefinition> chunks;
 }
 
-class _ResolvedProgressPosition {
-  const _ResolvedProgressPosition({
-    required this.characterIndex,
-    this.preparedChapterTexts,
-  });
-
-  final int characterIndex;
-  final List<ChapterText>? preparedChapterTexts;
-}
-
-class _WordIndexConversionResult {
-  const _WordIndexConversionResult({
-    required this.wordToCharacterIndex,
-    this.capturedChapterTexts,
-  });
-
-  final Map<int, int> wordToCharacterIndex;
-  final List<ChapterText>? capturedChapterTexts;
-}
-
 /// Configuration for chunking and batching text for summary generation.
 /// 
 /// Different summary providers have vastly different capabilities:
@@ -215,6 +195,26 @@ class EnhancedSummaryService {
   }
 
   Future<String> runCustomPrompt(String prompt, String languageCode) async {
+    return await _callLLM(
+      prompt,
+      languageCode,
+      debugContext: 'custom_prompt',
+    );
+  }
+
+  Future<String> _callLLM(
+    String prompt,
+    String languageCode, {
+    required String debugContext,
+  }) async {
+    final previewLength = 256;
+    final preview = prompt.length > previewLength
+        ? '${prompt.substring(0, previewLength)}…'
+        : prompt;
+    if (kDebugMode) {
+      debugPrint('[LLM][$debugContext] language=$languageCode chars=${prompt.length}');
+      debugPrint('[LLM][$debugContext] promptPreview="$preview"');
+    }
     return await _baseSummaryService.generateSummary(prompt, languageCode);
   }
 
@@ -232,181 +232,75 @@ class EnhancedSummaryService {
     }
   }
 
-  /// Extract text from book up to a specific character index
-  /// This is the new method that uses characterIndex instead of wordIndex
+  /// Extract text from the book up to a specific character index.
   Future<List<ChapterText>> _extractTextUpToCharacterIndex(
     Book book,
-    ReadingProgress progress,
+    int targetCharacterIndex,
   ) async {
-    final currentCharacterIndex = progress.currentCharacterIndex;
-    if (currentCharacterIndex != null) {
-      return _ResolvedProgressPosition(
-        characterIndex: math.max(0, currentCharacterIndex),
-      );
-    }
-
-    final normalizedWordIndex = _normalizeLegacyWordIndex(progress.currentWordIndex);
-    if (normalizedWordIndex == null) {
-      return const _ResolvedProgressPosition(characterIndex: 0);
-    }
-
-    final conversion = await _resolveWordIndexesToCharacterOffsets(
-      book,
-      {normalizedWordIndex},
-      captureChapterTextsFor: normalizedWordIndex,
-    );
-
-    final resolvedIndex = conversion.wordToCharacterIndex[normalizedWordIndex] ?? 0;
-    return _ResolvedProgressPosition(
-      characterIndex: resolvedIndex,
-      preparedChapterTexts: conversion.capturedChapterTexts,
-    );
-  }
-
-  Future<_WordIndexConversionResult> _resolveWordIndexesToCharacterOffsets(
-    Book book,
-    Set<int> wordIndexes, {
-    int? captureChapterTextsFor,
-  }) async {
-    final normalizedTargets = <int>{};
-    for (final index in wordIndexes) {
-      if (index >= 0) {
-        normalizedTargets.add(index);
-      }
-    }
-
-    final captureTarget =
-        captureChapterTextsFor != null && captureChapterTextsFor >= 0
-            ? captureChapterTextsFor
-            : null;
-    if (captureTarget != null) {
-      normalizedTargets.add(captureTarget);
-    }
-
-    if (normalizedTargets.isEmpty) {
-      return const _WordIndexConversionResult(
-        wordToCharacterIndex: <int, int>{},
-        capturedChapterTexts: null,
-      );
+    final safeTarget = math.max(0, targetCharacterIndex);
+    if (safeTarget == 0) {
+      return const <ChapterText>[];
     }
 
     final epub = await _bookService.loadEpubBook(book.filePath);
-    final chapters = _parseChapters(epub);
+    final orderedSections = _parseChapters(epub);
 
-    if (chapters.isEmpty) {
-      final zeros = <int, int>{
-        for (final index in normalizedTargets) index: 0,
-      };
-      return _WordIndexConversionResult(
-        wordToCharacterIndex: zeros,
-        capturedChapterTexts: captureTarget != null ? <ChapterText>[] : null,
+    if (orderedSections.isEmpty) {
+      throw Exception(
+        'Unable to extract text for "${book.title}" because the EPUB does not expose structured sections.',
       );
     }
 
-    final sortedTargets = normalizedTargets.toList()..sort();
-    final conversions = <int, int>{};
-    final collectedChapters = <ChapterText>[];
-    List<ChapterText>? captureSnapshot;
-    final captureRequested = captureTarget != null;
-    var captureCompleted = !captureRequested;
+    final segments = <ChapterText>[];
+    var remaining = safeTarget;
+    var segmentIndex = 0;
+    final segmentLength = math.max(_chunkCharacterSize, 4000);
 
-    var currentWordCount = 0;
-    var currentCharCount = 0;
-    var targetPointer = 0;
+    for (final section in orderedSections) {
+      if (remaining <= 0) {
+        break;
+      }
 
-    for (final chapter in chapters) {
-      final plainText = _extractTextFromHtml(chapter.htmlContent);
+      final plainText = _extractTextFromHtml(section.htmlContent);
       if (plainText.isEmpty) {
         continue;
       }
 
-      final words = tokenizePreservingWhitespace(plainText);
-      final chapterWordCount = words.length;
-      final chapterCharCount = plainText.length;
-
-      while (targetPointer < sortedTargets.length &&
-          sortedTargets[targetPointer] <= currentWordCount) {
-        final target = sortedTargets[targetPointer];
-        conversions[target] = currentCharCount;
-        if (!captureCompleted && target == captureTarget) {
-          captureSnapshot = List<ChapterText>.from(collectedChapters);
-          captureCompleted = true;
-        }
-        targetPointer++;
+      final takeLength = math.min(remaining, plainText.length);
+      if (takeLength <= 0) {
+        break;
       }
 
-      final chapterEndWord = currentWordCount + chapterWordCount;
-      while (targetPointer < sortedTargets.length &&
-          sortedTargets[targetPointer] < chapterEndWord) {
-        final target = sortedTargets[targetPointer];
-        final wordsToInclude = target - currentWordCount;
-        final charOffset = _countCharactersForWords(words, wordsToInclude);
-        final charIndex = currentCharCount + charOffset;
-        conversions[target] = charIndex;
+      final truncated = plainText.substring(0, takeLength);
+      final isCompleteSection = takeLength == plainText.length;
 
-        if (!captureCompleted && target == captureTarget) {
-          final truncatedText = charOffset <= 0
-              ? ''
-              : plainText.substring(0, math.min(charOffset, plainText.length));
-          final snapshot = List<ChapterText>.from(collectedChapters);
-          if (truncatedText.isNotEmpty) {
-            snapshot.add(ChapterText(
-              chapterIndex: chapter.index,
-              title: chapter.title,
-              text: truncatedText,
-              isComplete: false,
-            ));
-          }
-          captureSnapshot = snapshot;
-          captureCompleted = true;
-        }
-        targetPointer++;
-      }
-
-      if (!captureCompleted && captureRequested) {
-        collectedChapters.add(ChapterText(
-          chapterIndex: chapter.index,
-          title: chapter.title,
-          text: plainText,
-          isComplete: true,
+      int offset = 0;
+      while (offset < truncated.length) {
+        final end = math.min(offset + segmentLength, truncated.length);
+        segments.add(ChapterText(
+          chapterIndex: segmentIndex++,
+          title: section.title,
+          text: truncated.substring(offset, end),
+          isComplete: isCompleteSection && end == truncated.length,
         ));
+        offset = end;
       }
 
-      currentWordCount = chapterEndWord;
-      currentCharCount += chapterCharCount;
+      remaining -= takeLength;
 
-      if (targetPointer >= sortedTargets.length && captureCompleted) {
+      if (!isCompleteSection) {
         break;
       }
     }
 
-    final totalCharCount = currentCharCount;
-    while (targetPointer < sortedTargets.length) {
-      final target = sortedTargets[targetPointer];
-      conversions[target] = totalCharCount;
-      if (!captureCompleted && target == captureTarget) {
-        captureSnapshot = List<ChapterText>.from(collectedChapters);
-        captureCompleted = true;
-      }
-      targetPointer++;
+    if (remaining > 0) {
+      final extracted = safeTarget - remaining;
+      throw Exception(
+        'Only extracted $extracted characters for "${book.title}" before running out of text (requested $safeTarget).',
+      );
     }
 
-    return _WordIndexConversionResult(
-      wordToCharacterIndex: conversions,
-      capturedChapterTexts: captureSnapshot,
-    );
-  }
-
-  int _countCharactersForWords(List<String> words, int count) {
-    if (count <= 0) {
-      return 0;
-    }
-    var total = 0;
-    final limit = math.min(count, words.length);
-    for (var i = 0; i < limit; i++) {
-      total += words[i].length;
-    }
-    return total;
+    return segments;
   }
 
   /// Estimate token count (rough approximation: 1 token ≈ 4 characters)
@@ -488,9 +382,8 @@ class EnhancedSummaryService {
     );
 
     if (chapterTexts.isEmpty) {
-      return const _PreparedTextData(
-        fullText: '',
-        chunks: <_ChunkDefinition>[],
+      throw Exception(
+        'No text was extracted for "${book.title}" before character index $targetCharacterIndex.',
       );
     }
 
@@ -499,6 +392,12 @@ class EnhancedSummaryService {
       buffer.write(chapterText.text);
     }
     final fullText = buffer.toString();
+
+    if (fullText.length != targetCharacterIndex) {
+      throw Exception(
+        'Extracted ${fullText.length} characters for "${book.title}" but expected exactly $targetCharacterIndex.',
+      );
+    }
 
     _logExtractionWindowDebug(
       book: book,
@@ -727,6 +626,16 @@ class EnhancedSummaryService {
     return percent;
   }
 
+  String _extractFirstWords(String text, int wordCount) {
+    final trimmed = text.trimLeft();
+    if (trimmed.isEmpty) {
+      return '';
+    }
+    final words = trimmed.split(RegExp(r'\s+'));
+    final end = math.min(words.length, wordCount);
+    return words.sublist(0, end).join(' ');
+  }
+
   String _extractLastWords(String text, int wordCount) {
     final trimmed = text.trimRight();
     if (trimmed.isEmpty) {
@@ -735,6 +644,19 @@ class EnhancedSummaryService {
     final words = trimmed.split(RegExp(r'\s+'));
     final start = math.max(0, words.length - wordCount);
     return words.sublist(start).join(' ');
+  }
+
+  void _logBeginningSummaryWindow(String text) {
+    if (!kDebugMode) {
+      return;
+    }
+    if (text.isEmpty) {
+      debugPrint('Summary from the start requested but no text extracted.');
+      return;
+    }
+    final leading = _extractFirstWords(text, 20);
+    final trailing = _extractLastWords(text, 20);
+    debugPrint('Summary from the start from "$leading" to "$trailing"');
   }
 
   void _logExtractionWindowDebug({
@@ -872,7 +794,11 @@ class EnhancedSummaryService {
         endIndex: endIndex,
         readingProgressPercent: readingProgressPercent,
       );
-      final summary = await _baseSummaryService.generateSummary(prompt, language);
+      final summary = await _callLLM(
+        prompt,
+        language,
+        debugContext: debugContext ?? 'chunk_summary',
+      );
       
       // Validate the summary is not empty or just error text
       if (summary.trim().isEmpty || 
@@ -919,7 +845,11 @@ class EnhancedSummaryService {
       try {
         // Use improved prompt with anti-leakage instructions
         final prompt = _buildFallbackSummaryPrompt(summaryText, bookTitle, language);
-        return await _baseSummaryService.generateSummary(prompt, language);
+        return await _callLLM(
+          prompt,
+          language,
+          debugContext: 'cumulative_summary',
+        );
       } catch (e) {
         // If summarization fails, return the combined summaries
         debugPrint('Error generating cumulative summary: $e');
@@ -939,7 +869,11 @@ class EnhancedSummaryService {
     try {
       // Use improved prompt with anti-leakage instructions
       final prompt = _buildConciseSummaryPrompt(fullSummary, bookTitle, language);
-      return await _baseSummaryService.generateSummary(prompt, language);
+      return await _callLLM(
+        prompt,
+        language,
+        debugContext: 'concise_summary',
+      );
     } catch (e) {
       debugPrint('Error generating concise summary: $e');
       // Fallback: return first few sentences
@@ -1133,7 +1067,11 @@ class EnhancedSummaryService {
     final prompt = _buildBatchSummaryPrompt(combined, language);
 
     try {
-      return await _baseSummaryService.generateSummary(prompt, language);
+      return await _callLLM(
+        prompt,
+        language,
+        debugContext: 'batch_summary',
+      );
     } catch (e) {
       debugPrint('Error summarizing batch: $e');
       return combined; // Fallback to concatenation
@@ -1167,7 +1105,11 @@ class EnhancedSummaryService {
     final prompt = _buildNarrativeSynthesisPrompt(combined, bookTitle, language);
 
     try {
-      final narrative = await _baseSummaryService.generateSummary(prompt, language);
+      final narrative = await _callLLM(
+        prompt,
+        language,
+        debugContext: 'narrative_synthesis',
+      );
       // Return the synthesized narrative directly
       return narrative;
     } catch (e) {
@@ -1217,14 +1159,14 @@ class EnhancedSummaryService {
     String languageCode,
   ) async {
     try {
-      // Summaries now rely solely on exact character offsets; when none are
-      // available we consider the user to be at the very beginning.
-      final currentCharacterIndex = math.max(0, progress.currentCharacterIndex ?? 0);
-      final language = _getLanguage(languageCode);
-
-      if (currentCharacterIndex <= 0) {
-        return 'No content read yet.';
+      final currentCharacterIndex = progress.currentCharacterIndex;
+      if (currentCharacterIndex == null) {
+        throw Exception('Reading progress is missing the exact character index required for summaries.');
       }
+      if (currentCharacterIndex <= 0) {
+        throw Exception('Cannot summarize from the beginning without a positive reading position.');
+      }
+      final language = _getLanguage(languageCode);
 
       final prepared = await _prepareTextData(
         book,
@@ -1237,6 +1179,8 @@ class EnhancedSummaryService {
       if (prepared.fullText.isEmpty) {
         throw Exception('No content found in book');
       }
+
+      _logBeginningSummaryWindow(prepared.fullText);
 
       final cache = await _dbService.getSummaryCache(book.id);
       final cachedCharacterIndex = cache?.lastProcessedCharacterIndex ?? -1;
@@ -1253,6 +1197,7 @@ class EnhancedSummaryService {
       final allChunkSummaries = await _dbService.getSummaryChunks(
         book.id,
         maxChunkIndex,
+        maxEndCharacterIndex: currentCharacterIndex,
       );
       
       // Filter out invalid cached summaries
@@ -1728,7 +1673,11 @@ class EnhancedSummaryService {
       final prompt = _buildCharacterExtractionPrompt(safeText, language);
 
       try {
-        final response = await _baseSummaryService.generateSummary(prompt, language);
+        final response = await _callLLM(
+          prompt,
+          language,
+          debugContext: 'character_extraction',
+        );
         
         // Parse the response to extract character notes
         return _parseCharacterNotesFromStructuredResponse(response);

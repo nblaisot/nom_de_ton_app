@@ -386,13 +386,20 @@ class SummaryDatabaseService {
 
   Future<List<BookSummaryChunk>> getSummaryChunks(
     String bookId,
-    int upToChunkIndex,
-  ) async {
+    int upToChunkIndex, {
+    int? maxEndCharacterIndex,
+  }) async {
     final db = await database;
+    String whereClause = 'bookId = ? AND chunkIndex <= ?';
+    final whereArgs = <Object>[bookId, upToChunkIndex];
+    if (maxEndCharacterIndex != null) {
+      whereClause += ' AND endCharacterIndex <= ?';
+      whereArgs.add(maxEndCharacterIndex);
+    }
     final results = await db.query(
       'summary_chunks',
-      where: 'bookId = ? AND chunkIndex <= ?',
-      whereArgs: [bookId, upToChunkIndex],
+      where: whereClause,
+      whereArgs: whereArgs,
       orderBy: 'chunkIndex ASC',
     );
 
