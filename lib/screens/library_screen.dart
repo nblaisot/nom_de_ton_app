@@ -225,7 +225,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
       // Generate summaries for the book that was just read (if it has progress)
       // Use fresh progress after reload
       final progress = _bookProgress[book.id];
-      if (progress != null && progress.currentChapterIndex != null && progress.currentChapterIndex! > 0) {
+      final hasRealProgress =
+          progress != null && (progress.currentCharacterIndex ?? 0) > 0;
+      if (hasRealProgress) {
         final appLocale = Localizations.localeOf(context);
         final languageCode = appLocale.languageCode;
         // Generate in background without blocking - fire and forget
@@ -249,7 +251,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
     for (final book in books) {
       final progress = progressMap[book.id];
-      if (progress != null && progress.currentChapterIndex != null && progress.currentChapterIndex! > 0) {
+      final hasRealProgress =
+          progress != null && (progress.currentCharacterIndex ?? 0) > 0;
+      if (hasRealProgress) {
         // Generate in background without waiting (void method, completely non-blocking)
         // generateSummariesIfNeeded handles errors internally
         BackgroundSummaryService().generateSummariesIfNeeded(
@@ -888,8 +892,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       return null;
     }
 
-    double progressValue = progress.progress ??
-        _calculateLegacyProgress(book, progress);
+    double progressValue = progress.progress ?? 0;
     progressValue = progressValue.clamp(0.0, 1.0);
 
     if (progressValue <= 0.0) {
@@ -900,48 +903,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
     return _ProgressInfo(value: progressValue, label: progressPercentage);
   }
 
-  double _calculateLegacyProgress(Book book, ReadingProgress progress) {
-    final totalPages = progress.totalPages;
-    final chapterIndex = (progress.currentChapterIndex ?? 0).toDouble();
-    final pageInChapter = progress.currentPageInChapter ?? -1;
-    final additionalPages = pageInChapter >= 0 ? (pageInChapter + 1).toDouble() : 0.0;
-
-    if (totalPages != null && totalPages > 0) {
-      final totalChapters = _bookTotalChapters[book.id];
-      if (totalChapters != null && totalChapters > 0) {
-        final pagesPerChapter = totalPages / totalChapters;
-        final pagesRead = (chapterIndex * pagesPerChapter) + additionalPages;
-        return (pagesRead / totalPages).clamp(0.0, 1.0);
-      }
-      const estimatedChapters = 20.0;
-      final pagesPerChapter = totalPages / estimatedChapters;
-      final pagesRead = (chapterIndex * pagesPerChapter) + additionalPages;
-      return (pagesRead / totalPages).clamp(0.0, 1.0);
-    }
-
-    final totalChapters = _bookTotalChapters[book.id];
-    if (totalChapters != null && totalChapters > 0) {
-      final baseProgress = chapterIndex / totalChapters;
-      final fractional = pageInChapter >= 0
-          ? ((pageInChapter + 1).toDouble() / 100).clamp(0.0, 1.0) / totalChapters
-          : 0.0;
-      return (baseProgress + fractional).clamp(0.0, 1.0);
-    }
-
-    const estimatedTotalChapters = 20.0;
-    if (estimatedTotalChapters <= 0) {
-      return 0.0;
-    }
-    return (chapterIndex / estimatedTotalChapters).clamp(0.0, 1.0);
-  }
-
   bool _isBookCompleted(Book book) {
     final progress = _bookProgress[book.id];
     if (progress == null) return false;
 
-    final progressValue = (progress.progress ??
-            _calculateLegacyProgress(book, progress))
-        .clamp(0.0, 1.0);
+    final progressValue = (progress.progress ?? 0).clamp(0.0, 1.0);
     return progressValue >= 0.99;
   }
 

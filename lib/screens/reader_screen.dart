@@ -212,8 +212,9 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
         _isLoading = false;
       });
 
-      final initialCharIndex =
-          progress?.currentCharacterIndex ?? progress?.currentWordIndex ?? 0;
+      final initialCharIndex = progress?.currentCharacterIndex ?? 0;
+      // When no character information is stored we simply restart from the
+      // beginning, letting the first pagination pass reinitialize the data.
       _scheduleRepagination(initialCharIndex: initialCharIndex);
     } catch (e) {
       setState(() {
@@ -229,14 +230,13 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
       int? targetCharIndex;
       if (retainCurrentPage) {
         final currentPage = _engine?.getPage(_currentPageIndex);
-        targetCharIndex = currentPage?.startCharIndex ??
-            _savedProgress?.currentCharacterIndex ?? _savedProgress?.currentWordIndex;
+        targetCharIndex =
+            currentPage?.startCharIndex ?? _savedProgress?.currentCharacterIndex;
       } else if (initialCharIndex != null) {
         targetCharIndex = initialCharIndex;
       }
 
-      targetCharIndex ??=
-          _savedProgress?.currentCharacterIndex ?? _savedProgress?.currentWordIndex ?? 0;
+      targetCharIndex ??= _savedProgress?.currentCharacterIndex ?? 0;
       targetCharIndex = math.max(0, targetCharIndex);
 
       unawaited(_rebuildPagination(targetCharIndex, actualSize: actualSize));
@@ -454,9 +454,6 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
       final pageProgress = _calculateProgressForPage(page);
       final progress = ReadingProgress(
         bookId: widget.book.id,
-        currentChapterIndex: page.chapterIndex,
-        currentPageInChapter: null,
-        currentWordIndex: page.startWordIndex,
         currentCharacterIndex: page.startCharIndex,
         progress: pageProgress,
         lastRead: DateTime.now(),
@@ -470,14 +467,12 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
         widget.book.id,
         chunkIndex: chunkIndex,
         characterIndex: page.startCharIndex,
-        wordIndex: page.startWordIndex,
       ));
       if (_summaryService != null) {
         unawaited(_summaryService!.updateLastReadingStop(
           widget.book.id,
           chunkIndex: chunkIndex,
           characterIndex: page.startCharIndex,
-          wordIndex: page.startWordIndex,
         ));
       }
     } catch (_) {
@@ -1059,10 +1054,8 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
 
     final progress = ReadingProgress(
       bookId: widget.book.id,
-      currentWordIndex: currentPage.startWordIndex,
       currentCharacterIndex: currentPage.startCharIndex,
-      currentChapterIndex: currentPage.chapterIndex,
-      currentPageInChapter: null,
+      progress: _calculateProgressForPage(currentPage),
       lastRead: DateTime.now(),
     );
 

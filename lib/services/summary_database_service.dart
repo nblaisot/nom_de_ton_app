@@ -468,7 +468,6 @@ class SummaryDatabaseService {
     String bookId, {
     required int chunkIndex,
     required int characterIndex,
-    int? wordIndex,
   }) async {
     final cache = await getSummaryCache(bookId);
     final now = DateTime.now();
@@ -477,16 +476,13 @@ class SummaryDatabaseService {
       // and update lastReadingStop to current position with current timestamp
       final updatedCache = cache.copyWith(
         previousReadingStopChunkIndex: cache.lastReadingStopChunkIndex,
-        previousReadingStopWordIndex: cache.lastReadingStopWordIndex,
         previousReadingStopCharacterIndex: cache.lastReadingStopCharacterIndex,
         previousReadingStopTimestamp: cache.lastReadingStopTimestamp,
         lastReadingStopChunkIndex: chunkIndex,
-        lastReadingStopWordIndex: wordIndex,
         lastReadingStopCharacterIndex: characterIndex,
         lastReadingStopTimestamp: now,
         summarySinceLastTime: null,
         summarySinceLastTimeChunkIndex: null,
-        summarySinceLastTimeWordIndex: null,
         summarySinceLastTimeCharacterIndex: null,
       );
       await saveSummaryCache(updatedCache);
@@ -498,7 +494,6 @@ class SummaryDatabaseService {
         cumulativeSummary: '',
         lastUpdated: DateTime.now(),
         lastReadingStopChunkIndex: chunkIndex,
-        lastReadingStopWordIndex: wordIndex,
         lastReadingStopCharacterIndex: characterIndex,
         lastReadingStopTimestamp: now,
       );

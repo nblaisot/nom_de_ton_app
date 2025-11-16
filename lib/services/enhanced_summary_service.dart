@@ -19,7 +19,6 @@ import 'summary_service.dart';
 import 'openai_summary_service.dart';
 import 'prompt_config_service.dart';
 import '../utils/html_text_extractor.dart';
-import '../utils/text_tokenizer.dart';
 
 /// Represents text extracted from a chapter, possibly truncated.
 class ChapterText {
@@ -213,60 +212,6 @@ class EnhancedSummaryService {
     }
   }
 
-  /// Extract text from book from beginning up to a specific word index.
-  /// Returns a list of chapter texts, where the last chapter may be truncated.
-  Future<List<ChapterText>> _extractTextUpToWordIndex(
-    Book book,
-    int targetWordIndex,
-  ) async {
-    final epub = await _bookService.loadEpubBook(book.filePath);
-    final chapters = _parseChapters(epub);
-    
-    if (chapters.isEmpty) {
-      return [];
-    }
-
-    final result = <ChapterText>[];
-    int currentWordCount = 0;
-
-    for (final chapter in chapters) {
-      final htmlText = chapter.htmlContent;
-      final plainText = _extractTextFromHtml(htmlText);
-      
-      if (plainText.isEmpty) continue;
-
-      final words = tokenizePreservingWhitespace(plainText);
-      final chapterWordCount = words.length;
-
-      if (currentWordCount + chapterWordCount <= targetWordIndex) {
-        // Entire chapter fits
-        result.add(ChapterText(
-          chapterIndex: chapter.index,
-          title: chapter.title,
-          text: plainText,
-          isComplete: true,
-        ));
-        currentWordCount += chapterWordCount;
-      } else {
-        // Partial chapter - extract only up to targetWordIndex
-        final remainingWords = targetWordIndex - currentWordCount;
-        if (remainingWords > 0) {
-          final partialWords = words.sublist(0, remainingWords);
-          final partialText = partialWords.join('');
-          result.add(ChapterText(
-            chapterIndex: chapter.index,
-            title: chapter.title,
-            text: partialText,
-            isComplete: false,
-          ));
-        }
-        break; // We've reached the target
-      }
-    }
-
-    return result;
-  }
-
   /// Extract text from book up to a specific character index
   /// This is the new method that uses characterIndex instead of wordIndex
   Future<List<ChapterText>> _extractTextUpToCharacterIndex(
@@ -390,8 +335,8 @@ class EnhancedSummaryService {
     int targetCharacterIndex,
     String language, {
     bool ensureChunkSummaries = true,
-  }
-  ) async {
+    double? readingProgressFraction,
+  }) async {
     final chapterTexts = await _extractTextUpToCharacterIndex(
       book,
       targetCharacterIndex,
@@ -409,6 +354,14 @@ class EnhancedSummaryService {
       buffer.write(chapterText.text);
     }
     final fullText = buffer.toString();
+
+    _logExtractionWindowDebug(
+      book: book,
+      targetCharacterIndex: targetCharacterIndex,
+      fullText: fullText,
+      chapterTexts: chapterTexts,
+      readingProgressFraction: readingProgressFraction,
+    );
 
     final chunks = _buildChunksFromText(fullText);
 
@@ -459,7 +412,15 @@ class EnhancedSummaryService {
       }
 
       try {
-        final summary = await _generateChunkSummary(chunkText, null, language);
+        final summary = await _generateChunkSummary(
+          chunkText,
+          null,
+          language,
+          chunkIndex: chunk.index,
+          startIndex: chunk.start,
+          endIndex: chunk.end,
+          debugContext: 'chunk_cache_generation',
+        );
 
         if (summary.trim().isEmpty ||
             summary.contains('[Unable to generate') ||
@@ -486,13 +447,6 @@ class EnhancedSummaryService {
         debugPrint('Error generating summary for chunk ${chunk.index}: $e');
       }
     }
-  }
-
-  /// Estimate character index from word index (for backward compatibility)
-  /// This is a rough approximation: average word length is ~5 characters + 1 space
-  int _estimateCharacterIndexFromWordIndex(int wordIndex, Book book) {
-    // Rough estimate: 6 characters per word on average
-    return wordIndex * 6;
   }
 
   /// Split a large paragraph into smaller pieces by sentences
@@ -620,6 +574,79 @@ class EnhancedSummaryService {
     return chunks;
   }
 
+  double? _progressFractionToPercent(double? fraction) {
+    if (fraction == null || fraction.isNaN || fraction.isInfinite) {
+      return null;
+    }
+    final percent = (fraction * 100).clamp(0, 100);
+    return percent;
+  }
+
+  String _extractLastWords(String text, int wordCount) {
+    final trimmed = text.trimRight();
+    if (trimmed.isEmpty) {
+      return '';
+    }
+    final words = trimmed.split(RegExp(r'\s+'));
+    final start = math.max(0, words.length - wordCount);
+    return words.sublist(start).join(' ');
+  }
+
+  void _logExtractionWindowDebug({
+    required Book book,
+    required int targetCharacterIndex,
+    required String fullText,
+    required List<ChapterText> chapterTexts,
+    double? readingProgressFraction,
+  }) {
+    if (!kDebugMode) {
+      return;
+    }
+
+    final percent = _progressFractionToPercent(readingProgressFraction);
+    final lastChapter = chapterTexts.isNotEmpty ? chapterTexts.last : null;
+    final trailingWords = _extractLastWords(fullText, 10);
+    final progressText = percent != null
+        ? '${percent.toStringAsFixed(2)}%'
+        : 'unknown';
+    final lastChapterInfo = lastChapter != null
+        ? 'last chapter "${lastChapter.title}" (complete: ${lastChapter.isComplete})'
+        : 'no chapter data';
+
+    debugPrint('[SummaryDebug] Extracted ${fullText.length} chars '
+        'for "${book.title}" up to index $targetCharacterIndex '
+        '(reading progress: $progressText, $lastChapterInfo).');
+    if (trailingWords.isNotEmpty) {
+      debugPrint('[SummaryDebug] Trailing context before cutoff: "$trailingWords"');
+    }
+  }
+
+  void _logChunkSummaryDebug({
+    required String stage,
+    required String text,
+    int? chunkIndex,
+    int? startIndex,
+    int? endIndex,
+    double? readingProgressPercent,
+  }) {
+    if (!kDebugMode) {
+      return;
+    }
+
+    final preview = text.length > 240 ? '${text.substring(0, 240)}…' : text;
+    final trailingWords = _extractLastWords(text, 10);
+    final progressText = readingProgressPercent != null
+        ? '${readingProgressPercent.toStringAsFixed(2)}%'
+        : 'unknown';
+    debugPrint('[SummaryDebug][$stage] chunk=${chunkIndex ?? '-'} '
+        'range=${startIndex ?? '-'}-${endIndex ?? '-'} '
+        'length=${text.length} progress=$progressText');
+    debugPrint('[SummaryDebug][$stage] preview="$preview"');
+    if (trailingWords.isNotEmpty) {
+      debugPrint('[SummaryDebug][$stage] trailing="$trailingWords"');
+    }
+  }
+
   /// Parse chapters from EPUB book
   List<Chapter> _parseChapters(EpubBook epub) {
     final chapters = <Chapter>[];
@@ -661,7 +688,16 @@ class EnhancedSummaryService {
   }
 
   /// Generate summary for a single chunk using the base summary service
-  Future<String> _generateChunkSummary(String text, String? chunkTitle, String language) async {
+  Future<String> _generateChunkSummary(
+    String text,
+    String? chunkTitle,
+    String language, {
+    int? chunkIndex,
+    int? startIndex,
+    int? endIndex,
+    String? debugContext,
+    double? readingProgressPercent,
+  }) async {
     try {
       // Limit text size to prevent crashes in native libraries
       // The text should already be plain text, but extract just in case
@@ -683,6 +719,14 @@ class EnhancedSummaryService {
       final prompt = _buildChunkSummaryPrompt(safeText, chunkTitle, language);
 
       // Use the base summary service with error handling
+      _logChunkSummaryDebug(
+        stage: debugContext ?? 'chunk_summary',
+        text: safeText,
+        chunkIndex: chunkIndex,
+        startIndex: startIndex,
+        endIndex: endIndex,
+        readingProgressPercent: readingProgressPercent,
+      );
       final summary = await _baseSummaryService.generateSummary(prompt, language);
       
       // Validate the summary is not empty or just error text
@@ -1028,9 +1072,9 @@ class EnhancedSummaryService {
     String languageCode,
   ) async {
     try {
-      // Use currentCharacterIndex if available, fallback to currentWordIndex for backward compatibility
-      final currentCharacterIndex = progress.currentCharacterIndex ??
-          (progress.currentWordIndex != null ? _estimateCharacterIndexFromWordIndex(progress.currentWordIndex!, book) : 0);
+      // Summaries now rely solely on exact character offsets; when none are
+      // available we consider the user to be at the very beginning.
+      final currentCharacterIndex = math.max(0, progress.currentCharacterIndex ?? 0);
       final language = _getLanguage(languageCode);
 
       if (currentCharacterIndex <= 0) {
@@ -1042,6 +1086,7 @@ class EnhancedSummaryService {
         currentCharacterIndex,
         language,
         ensureChunkSummaries: true,
+        readingProgressFraction: progress.progress,
       );
 
       if (prepared.fullText.isEmpty) {
@@ -1127,24 +1172,30 @@ class EnhancedSummaryService {
     String languageCode,
   ) async {
     try {
-      // Use currentCharacterIndex if available, fallback to currentWordIndex for backward compatibility
-      final currentCharacterIndex = progress.currentCharacterIndex ??
-          (progress.currentWordIndex != null ? _estimateCharacterIndexFromWordIndex(progress.currentWordIndex!, book) : 0);
       final language = _getLanguage(languageCode);
-      final prepared = await _prepareTextData(book, currentCharacterIndex, language);
-
-      // Get cache to find last reading stop
       final cache = await _dbService.getSummaryCache(book.id);
-      // Use characterIndex if available, fallback to wordIndex for backward compatibility
-      final lastReadingStopCharacterIndex = cache?.lastReadingStopCharacterIndex ??
-          (cache?.lastReadingStopWordIndex != null ? _estimateCharacterIndexFromWordIndex(cache!.lastReadingStopWordIndex!, book) : null);
-      final lastReadingStopTimestamp = cache?.lastReadingStopTimestamp;
-      final previousReadingStopCharacterIndex = cache?.previousReadingStopCharacterIndex ??
-          (cache?.previousReadingStopWordIndex != null ? _estimateCharacterIndexFromWordIndex(cache!.previousReadingStopWordIndex!, book) : null);
+      // Use the same exact character window as the "from the beginning" summary
+      // to avoid drift between different summary modes.
+      final currentCharacterIndex = math.max(0, progress.currentCharacterIndex ?? 0);
 
-      // Check if we have a cached "since last time" summary that's still valid
-      final cachedSinceLastTimeCharacterIndex = cache?.summarySinceLastTimeCharacterIndex ??
-          (cache?.summarySinceLastTimeWordIndex != null ? _estimateCharacterIndexFromWordIndex(cache!.summarySinceLastTimeWordIndex!, book) : null);
+      if (currentCharacterIndex <= 0) {
+        return language == 'fr'
+            ? 'Aucune lecture détectée.'
+            : 'No reading progress detected.';
+      }
+
+      final prepared = await _prepareTextData(
+        book,
+        currentCharacterIndex,
+        language,
+        readingProgressFraction: progress.progress,
+      );
+
+      final lastReadingStopCharacterIndex = cache?.lastReadingStopCharacterIndex;
+      final lastReadingStopTimestamp = cache?.lastReadingStopTimestamp;
+      final previousReadingStopCharacterIndex = cache?.previousReadingStopCharacterIndex;
+      final cachedSinceLastTimeCharacterIndex =
+          cache?.summarySinceLastTimeCharacterIndex;
       if (cache != null &&
           cache.summarySinceLastTime != null &&
           cachedSinceLastTimeCharacterIndex == currentCharacterIndex &&
@@ -1189,9 +1240,21 @@ class EnhancedSummaryService {
 
           String combined = '';
           final textChunks = _splitTextIntoChunks(beginningText, _safeChunkTokens);
+          int offset = 0;
           for (final chunkText in textChunks) {
             try {
-              final summary = await _generateChunkSummary(chunkText, null, language);
+              final chunkStart = offset;
+              final chunkEnd = chunkStart + chunkText.length;
+              offset = chunkEnd;
+              final summary = await _generateChunkSummary(
+                chunkText,
+                null,
+                language,
+                startIndex: chunkStart,
+                endIndex: chunkEnd,
+                debugContext: 'concise_beginning',
+                readingProgressPercent: _progressFractionToPercent(progress.progress),
+              );
               if (summary.trim().isNotEmpty &&
                   !summary.contains('[Unable to generate') &&
                   !summary.contains('[Summary generation failed') &&
@@ -1306,13 +1369,25 @@ class EnhancedSummaryService {
 
       // Generate summary of the session text
       final textChunks = _splitTextIntoChunks(sessionText, _safeChunkTokens);
-      
+
       String combinedSummary = '';
+      int sessionOffset = 0;
       for (final chunkText in textChunks) {
         try {
-          final summary = await _generateChunkSummary(chunkText, null, language);
-          
-          if (summary.trim().isNotEmpty && 
+          final chunkStart = sessionStartCharacterIndex + sessionOffset;
+          final chunkEnd = chunkStart + chunkText.length;
+          sessionOffset += chunkText.length;
+          final summary = await _generateChunkSummary(
+            chunkText,
+            null,
+            language,
+            startIndex: chunkStart,
+            endIndex: chunkEnd,
+            debugContext: 'since_last_time_session',
+            readingProgressPercent: _progressFractionToPercent(progress.progress),
+          );
+
+          if (summary.trim().isNotEmpty &&
               !summary.contains('[Unable to generate') &&
               !summary.contains('[Summary generation failed') &&
               !summary.contains('Exception:')) {
@@ -1377,16 +1452,19 @@ class EnhancedSummaryService {
     String languageCode,
   ) async {
     try {
-      // Use currentCharacterIndex if available, fallback to currentWordIndex for backward compatibility
-      final currentCharacterIndex = progress.currentCharacterIndex ?? 
-          (progress.currentWordIndex != null ? _estimateCharacterIndexFromWordIndex(progress.currentWordIndex!, book) : 0);
+      final currentCharacterIndex = math.max(0, progress.currentCharacterIndex ?? 0);
       final language = _getLanguage(languageCode);
-      
+
       if (currentCharacterIndex <= 0) {
         return 'No content read yet.';
       }
 
-      final prepared = await _prepareTextData(book, currentCharacterIndex, language);
+      final prepared = await _prepareTextData(
+        book,
+        currentCharacterIndex,
+        language,
+        readingProgressFraction: progress.progress,
+      );
 
       if (prepared.fullText.isEmpty) {
         throw Exception('No content found in book');
@@ -1875,13 +1953,11 @@ class EnhancedSummaryService {
     String bookId, {
     required int chunkIndex,
     required int characterIndex,
-    int? wordIndex,
   }) async {
     await _dbService.updateLastReadingStop(
       bookId,
       chunkIndex: chunkIndex,
       characterIndex: characterIndex,
-      wordIndex: wordIndex,
     );
   }
 
