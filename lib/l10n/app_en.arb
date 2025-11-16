@@ -192,6 +192,10 @@
   "@summariesReset": {
     "description": "Message displayed when summaries are reset"
   },
+  "summaryDeleted": "Summary deleted",
+  "@summaryDeleted": {
+    "description": "Message displayed when a summary is deleted"
+  },
   "resetSummariesError": "Unable to reset summaries. Please try again.",
   "@resetSummariesError": {
     "description": "Error message when reset fails"
@@ -524,6 +528,10 @@
         "type": "String"
       }
     }
+  },
+  "summaryFoundInCache": "Summary found in cache",
+  "@summaryFoundInCache": {
+    "description": "Status message when summary is retrieved from cache"
   },
   "errorGeneratingSummary": "Error generating summary: {error}",
   "@errorGeneratingSummary": {

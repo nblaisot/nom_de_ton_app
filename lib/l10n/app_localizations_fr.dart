@@ -105,6 +105,9 @@ class AppLocalizationsFr extends AppLocalizations {
   String get summary => 'Résumé';
 
   @override
+  String get summariesSectionTitle => 'Résumés';
+
+  @override
   String get backToLibrary => 'Retour à la bibliothèque';
 
   @override
@@ -134,6 +137,9 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get summariesReset => 'Résumés réinitialisés';
+
+  @override
+  String get summaryDeleted => 'Résumé supprimé';
 
   @override
   String get resetSummariesError =>
@@ -378,6 +384,20 @@ class AppLocalizationsFr extends AppLocalizations {
   String get generatingSummary => 'Génération du résumé...';
 
   @override
+  String get summaryReset => 'Réinitialiser ce résumé';
+
+  @override
+  String get summaryStatusPreparing => 'Préparation...';
+
+  @override
+  String summaryStatusCalling(String provider) {
+    return 'Appel de $provider...';
+  }
+
+  @override
+  String get summaryFoundInCache => 'Résumé trouvé dans le cache';
+
+  @override
   String errorGeneratingSummary(String error) {
     return 'Erreur lors de la génération du résumé : $error';
   }
@@ -423,18 +443,6 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get languageFrench => 'Français';
-
-  @override
-  String get summariesSectionTitle => 'Résumés';
-
-  @override
-  String get summaryReset => 'Réinitialiser ce résumé';
-
-  @override
-  String get summaryStatusPreparing => 'Préparation...';
-
-  @override
-  String summaryStatusCalling(Object provider) => 'Appel de $provider...';
 
   @override
   String get summaryFromBeginning => 'Depuis le début';

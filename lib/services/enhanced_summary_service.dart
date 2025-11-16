@@ -18,6 +18,7 @@ import 'book_service.dart';
 import 'summary_service.dart';
 import 'openai_summary_service.dart';
 import 'prompt_config_service.dart';
+import 'api_cache_service.dart';
 import '../utils/html_text_extractor.dart';
 
 /// Represents text extracted from a chapter, possibly truncated.
@@ -196,8 +197,18 @@ class EnhancedSummaryService {
     return _computeChunkIndex(characterIndex, defaultChunkCharacters);
   }
 
-  Future<String> runCustomPrompt(String prompt, String languageCode) async {
-    return await _baseSummaryService.generateSummary(prompt, languageCode);
+  Future<String> runCustomPrompt(
+    String prompt,
+    String languageCode, {
+    String? bookId,
+    VoidCallback? onCacheHit,
+  }) async {
+    return await _baseSummaryService.generateSummary(
+      prompt,
+      languageCode,
+      bookId: bookId,
+      onCacheHit: onCacheHit,
+    );
   }
 
   /// Extract plain text from HTML content
@@ -380,25 +391,32 @@ class EnhancedSummaryService {
     double? readingProgressFraction,
     String? preparedEngineText,
   }) async {
+    debugPrint('[SummaryDebug] _prepareTextData called: targetCharacterIndex=$targetCharacterIndex, ensureChunkSummaries=$ensureChunkSummaries, preparedEngineText length=${preparedEngineText?.length ?? 0}');
     // If an engine-prepared text stream is provided, prefer it to ensure
     // character indices match the pagination engine exactly.
     String fullText;
     if (preparedEngineText != null) {
       if (preparedEngineText.isEmpty) {
+        debugPrint('[SummaryDebug] _prepareTextData: preparedEngineText is empty, returning empty');
         return const _PreparedTextData(fullText: '', chunks: <_ChunkDefinition>[]);
       }
       final safeEnd = math.min(targetCharacterIndex, preparedEngineText.length);
       if (safeEnd <= 0) {
+        debugPrint('[SummaryDebug] _prepareTextData: safeEnd <= 0 ($safeEnd), returning empty');
         return const _PreparedTextData(fullText: '', chunks: <_ChunkDefinition>[]);
       }
       fullText = preparedEngineText.substring(0, safeEnd);
+      debugPrint('[SummaryDebug] _prepareTextData: Using preparedEngineText, extracted ${fullText.length} characters');
     } else {
+      debugPrint('[SummaryDebug] _prepareTextData: Extracting text from book...');
       final chapterTexts = await _extractTextUpToCharacterIndex(
         book,
         targetCharacterIndex,
       );
+      debugPrint('[SummaryDebug] _prepareTextData: Extracted ${chapterTexts.length} chapters');
 
       if (chapterTexts.isEmpty) {
+        debugPrint('[SummaryDebug] _prepareTextData: No chapter texts, returning empty');
         return const _PreparedTextData(
           fullText: '',
           chunks: <_ChunkDefinition>[],
@@ -410,6 +428,7 @@ class EnhancedSummaryService {
         buffer.write(chapterText.text);
       }
       fullText = buffer.toString();
+      debugPrint('[SummaryDebug] _prepareTextData: Built fullText from chapters, length=${fullText.length}');
     }
 
     // Debug: Log the full text captured up to the target (can be large)
@@ -427,12 +446,19 @@ class EnhancedSummaryService {
       readingProgressFraction: readingProgressFraction,
     );
 
+    debugPrint('[SummaryDebug] _prepareTextData: Building chunks from text...');
     final chunks = _buildChunksFromText(fullText);
+    debugPrint('[SummaryDebug] _prepareTextData: Built ${chunks.length} chunks');
 
     if (ensureChunkSummaries && chunks.isNotEmpty) {
+      debugPrint('[SummaryDebug] _prepareTextData: Ensuring chunk summaries for ${chunks.length} chunks...');
       await _ensureChunkSummaries(book, chunks, language);
+      debugPrint('[SummaryDebug] _prepareTextData: Chunk summaries ensured');
+    } else {
+      debugPrint('[SummaryDebug] _prepareTextData: Skipping chunk summary generation (ensureChunkSummaries=$ensureChunkSummaries, chunks.isEmpty=${chunks.isEmpty})');
     }
 
+    debugPrint('[SummaryDebug] _prepareTextData: Returning prepared data');
     return _PreparedTextData(
       fullText: fullText,
       chunks: chunks,
@@ -444,12 +470,16 @@ class EnhancedSummaryService {
     List<_ChunkDefinition> chunks,
     String language,
   ) async {
+    debugPrint('[SummaryDebug] _ensureChunkSummaries: Starting for ${chunks.length} chunks');
     for (final chunk in chunks) {
+      debugPrint('[SummaryDebug] _ensureChunkSummaries: Processing chunk ${chunk.index} (${chunk.start}-${chunk.end})');
       final existing = await _dbService.getSummaryChunk(book.id, chunk.index);
 
       if (existing != null && existing.contentHash == chunk.hash) {
+        debugPrint('[SummaryDebug] _ensureChunkSummaries: Chunk ${chunk.index} already exists with matching hash');
         if (existing.startCharacterIndex != chunk.start ||
             existing.endCharacterIndex != chunk.end) {
+          debugPrint('[SummaryDebug] _ensureChunkSummaries: Updating character indices for chunk ${chunk.index}');
           final updatedChunk = BookSummaryChunk(
             bookId: existing.bookId,
             chunkIndex: existing.chunkIndex,
@@ -472,10 +502,12 @@ class EnhancedSummaryService {
 
       final chunkText = chunk.text.trim();
       if (chunkText.isEmpty) {
+        debugPrint('[SummaryDebug] _ensureChunkSummaries: Chunk ${chunk.index} text is empty, skipping');
         continue;
       }
 
       try {
+        debugPrint('[SummaryDebug] _ensureChunkSummaries: Generating summary for chunk ${chunk.index} (text length: ${chunkText.length})...');
         final summary = await _generateChunkSummary(
           chunkText,
           null,
@@ -484,7 +516,10 @@ class EnhancedSummaryService {
           startIndex: chunk.start,
           endIndex: chunk.end,
           debugContext: 'chunk_cache_generation',
+          bookId: book.id,
+          onCacheHit: null, // Don't show cache message for background chunk generation
         );
+        debugPrint('[SummaryDebug] _ensureChunkSummaries: Generated summary for chunk ${chunk.index}, length: ${summary.length}');
 
         if (summary.trim().isEmpty ||
             summary.contains('[Unable to generate') ||
@@ -507,10 +542,13 @@ class EnhancedSummaryService {
         );
 
         await _dbService.saveSummaryChunk(summaryChunk);
-      } catch (e) {
-        debugPrint('Error generating summary for chunk ${chunk.index}: $e');
+        debugPrint('[SummaryDebug] _ensureChunkSummaries: Saved chunk ${chunk.index} summary');
+      } catch (e, stackTrace) {
+        debugPrint('[SummaryDebug] _ensureChunkSummaries: Error generating summary for chunk ${chunk.index}: $e');
+        debugPrint('[SummaryDebug] _ensureChunkSummaries: Stack trace: $stackTrace');
       }
     }
+    debugPrint('[SummaryDebug] _ensureChunkSummaries: Completed for all chunks');
   }
 
   /// Split a large paragraph into smaller pieces by sentences
@@ -761,6 +799,8 @@ class EnhancedSummaryService {
     int? endIndex,
     String? debugContext,
     double? readingProgressPercent,
+    String? bookId,
+    VoidCallback? onCacheHit,
   }) async {
     try {
       // Limit text size to prevent crashes in native libraries
@@ -791,7 +831,12 @@ class EnhancedSummaryService {
         endIndex: endIndex,
         readingProgressPercent: readingProgressPercent,
       );
-      final summary = await _baseSummaryService.generateSummary(prompt, language);
+      final summary = await _baseSummaryService.generateSummary(
+        prompt,
+        language,
+        bookId: bookId,
+        onCacheHit: onCacheHit,
+      );
       
       // Validate the summary is not empty or just error text
       if (summary.trim().isEmpty || 
@@ -871,8 +916,10 @@ class EnhancedSummaryService {
   Future<GeneralSummaryPayload> _generateGeneralSummary(
     List<BookSummaryChunk> chunks,
     String bookTitle,
-    String language,
-  ) async {
+    String language, {
+    String? bookId,
+    VoidCallback? onCacheHit,
+  }) async {
     if (chunks.isEmpty) {
       return GeneralSummaryPayload(narrative: 'No content available.');
     }
@@ -906,6 +953,8 @@ class EnhancedSummaryService {
           batches[i],
           '$bookTitle - Part ${i + 1}',
           language,
+          bookId: bookId,
+          onCacheHit: onCacheHit,
         );
         batchSummaries.add(batchSummary);
       }
@@ -915,6 +964,8 @@ class EnhancedSummaryService {
         batchSummaries,
         bookTitle,
         language,
+        bookId: bookId,
+        onCacheHit: onCacheHit,
       );
     } else {
       // Small enough to process directly
@@ -922,6 +973,8 @@ class EnhancedSummaryService {
         summaryTexts,
         bookTitle,
         language,
+        bookId: bookId,
+        onCacheHit: onCacheHit,
       );
     }
 
@@ -982,8 +1035,10 @@ class EnhancedSummaryService {
   Future<String> _summarizeBatch(
     List<String> chapterSummaries,
     String sectionTitle,
-    String language,
-  ) async {
+    String language, {
+    String? bookId,
+    VoidCallback? onCacheHit,
+  }) async {
     // Remove duplicates before combining
     final uniqueSummaries = _removeDuplicateSummaries(chapterSummaries);
     if (uniqueSummaries.isEmpty) {
@@ -995,7 +1050,12 @@ class EnhancedSummaryService {
     final prompt = _buildBatchSummaryPrompt(combined, language);
 
     try {
-      return await _baseSummaryService.generateSummary(prompt, language);
+      return await _baseSummaryService.generateSummary(
+        prompt,
+        language,
+        bookId: bookId,
+        onCacheHit: onCacheHit,
+      );
     } catch (e) {
       debugPrint('Error summarizing batch: $e');
       return combined; // Fallback to concatenation
@@ -1012,8 +1072,10 @@ class EnhancedSummaryService {
   Future<String> _synthesizeNarrative(
     List<String> summaries,
     String bookTitle,
-    String language,
-  ) async {
+    String language, {
+    String? bookId,
+    VoidCallback? onCacheHit,
+  }) async {
     // Remove duplicates before combining
     final uniqueSummaries = _removeDuplicateSummaries(summaries);
     if (uniqueSummaries.isEmpty) {
@@ -1029,7 +1091,12 @@ class EnhancedSummaryService {
     final prompt = _buildNarrativeSynthesisPrompt(combined, bookTitle, language);
 
     try {
-      final narrative = await _baseSummaryService.generateSummary(prompt, language);
+      final narrative = await _baseSummaryService.generateSummary(
+        prompt,
+        language,
+        bookId: bookId,
+        onCacheHit: onCacheHit,
+      );
       // Return the synthesized narrative directly
       return narrative;
     } catch (e) {
@@ -1075,19 +1142,25 @@ class EnhancedSummaryService {
   Future<String> getSummaryUpToPosition(
     Book book,
     ReadingProgress progress,
-    String languageCode,
-    {String? preparedEngineText}
-  ) async {
+    String languageCode, {
+    String? preparedEngineText,
+    VoidCallback? onCacheHit,
+  }) async {
     try {
+      debugPrint('[SummaryDebug] getSummaryUpToPosition called for book ${book.id}');
       // Summaries now rely solely on exact character offsets; when none are
       // available we consider the user to be at the very beginning.
       final currentCharacterIndex = math.max(0, progress.currentCharacterIndex ?? 0);
       final language = _getLanguage(languageCode);
 
+      debugPrint('[SummaryDebug] currentCharacterIndex: $currentCharacterIndex, language: $language');
+
       if (currentCharacterIndex <= 0) {
+        debugPrint('[SummaryDebug] Early return: No content read yet');
         return 'No content read yet.';
       }
 
+      debugPrint('[SummaryDebug] Calling _prepareTextData...');
       final prepared = await _prepareTextData(
         book,
         currentCharacterIndex,
@@ -1096,29 +1169,36 @@ class EnhancedSummaryService {
         readingProgressFraction: progress.progress,
         preparedEngineText: preparedEngineText,
       );
+      debugPrint('[SummaryDebug] _prepareTextData completed. fullText length: ${prepared.fullText.length}, chunks: ${prepared.chunks.length}');
 
       if (prepared.fullText.isEmpty) {
+        debugPrint('[SummaryDebug] Error: No content found in book');
         throw Exception('No content found in book');
       }
 
+      debugPrint('[SummaryDebug] Getting summary cache...');
       final cache = await _dbService.getSummaryCache(book.id);
       final cachedCharacterIndex = cache?.lastProcessedCharacterIndex ?? -1;
+      debugPrint('[SummaryDebug] Cache found: ${cache != null}, cachedCharacterIndex: $cachedCharacterIndex');
 
       if (cache != null &&
           cachedCharacterIndex == currentCharacterIndex &&
           cache.cumulativeSummary.isNotEmpty &&
           // If we are using engine-aligned text, do not short-circuit to avoid stale summaries
           preparedEngineText == null) {
+        debugPrint('[SummaryDebug] Returning cached summary');
         return cache.cumulativeSummary;
       }
 
       final maxChunkIndex = prepared.chunks.isNotEmpty
           ? prepared.chunks.last.index
           : -1;
+      debugPrint('[SummaryDebug] Getting chunk summaries, maxChunkIndex: $maxChunkIndex');
       final allChunkSummaries = await _dbService.getSummaryChunks(
         book.id,
         maxChunkIndex,
       );
+      debugPrint('[SummaryDebug] Found ${allChunkSummaries.length} chunk summaries');
       
       // Filter out invalid cached summaries
       final validChunkSummaries = allChunkSummaries.where((chunk) {
@@ -1130,27 +1210,35 @@ class EnhancedSummaryService {
             summary.contains('concise and clear resume') ||
             summary.trim().endsWith('?') ||
             summary.length < 50) {
-          debugPrint('Filtering out invalid cached summary for chunk ${chunk.chunkIndex}');
+          debugPrint('[SummaryDebug] Filtering out invalid cached summary for chunk ${chunk.chunkIndex}');
           return false;
         }
         return true;
       }).toList();
       
+      debugPrint('[SummaryDebug] Valid chunk summaries: ${validChunkSummaries.length}');
       if (validChunkSummaries.isEmpty) {
-        throw Exception('No valid summaries available');
+        debugPrint('[SummaryDebug] Error: No valid summaries available');
+        throw Exception('No valid summaries available. Please ensure you have read some content and that chunk summaries have been generated.');
       }
 
+      debugPrint('[SummaryDebug] Generating general summary...');
       // Generate hierarchical summary with structured data
       final generalSummary = await _generateGeneralSummary(
         validChunkSummaries,
         book.title,
         language,
+        bookId: book.id,
+        onCacheHit: onCacheHit,
       );
+      debugPrint('[SummaryDebug] General summary generated');
 
       // Format for display
+      debugPrint('[SummaryDebug] Formatting general summary...');
       final narrative = _formatGeneralSummary(generalSummary);
 
       // Update cache with structured and text summary
+      debugPrint('[SummaryDebug] Saving summary cache...');
       final updatedCache = (cache ?? BookSummaryCache(
         bookId: book.id,
         lastProcessedChunkIndex: maxChunkIndex,
@@ -1166,10 +1254,12 @@ class EnhancedSummaryService {
         generalSummary: generalSummary,
       );
       await _dbService.saveSummaryCache(updatedCache);
+      debugPrint('[SummaryDebug] Summary generation completed successfully');
 
       return narrative;
-    } catch (e) {
-      debugPrint('Error generating summary up to position: $e');
+    } catch (e, stackTrace) {
+      debugPrint('[SummaryDebug] Error generating summary up to position: $e');
+      debugPrint('[SummaryDebug] Stack trace: $stackTrace');
       rethrow;
     }
   }
@@ -1179,9 +1269,10 @@ class EnhancedSummaryService {
   Future<String> getSummarySinceLastTime(
     Book book,
     ReadingProgress progress,
-    String languageCode,
-    {String? preparedEngineText}
-  ) async {
+    String languageCode, {
+    String? preparedEngineText,
+    VoidCallback? onCacheHit,
+  }) async {
     try {
       final language = _getLanguage(languageCode);
       final cache = await _dbService.getSummaryCache(book.id);
@@ -1335,6 +1426,8 @@ Concise summary:''';
           final conciseSummary = await _baseSummaryService.generateSummary(
             formattedPrompt,
             language,
+            bookId: book.id,
+            onCacheHit: onCacheHit,
           );
 
           if (conciseSummary.trim().isEmpty ||
@@ -1436,6 +1529,8 @@ Concise summary:''';
             endIndex: chunkEnd,
             debugContext: 'since_last_time_session',
             readingProgressPercent: _progressFractionToPercent(progress.progress),
+            bookId: book.id,
+            onCacheHit: onCacheHit,
           );
 
           if (summary.trim().isNotEmpty &&
@@ -1499,9 +1594,10 @@ Concise summary:''';
   Future<String> getCharactersSummary(
     Book book,
     ReadingProgress progress,
-    String languageCode,
-    {String? preparedEngineText}
-  ) async {
+    String languageCode, {
+    String? preparedEngineText,
+    VoidCallback? onCacheHit,
+  }) async {
     try {
       final currentCharacterIndex = math.max(0, progress.currentCharacterIndex ?? 0);
       final language = _getLanguage(languageCode);
@@ -1565,6 +1661,8 @@ Concise summary:''';
               null,
               language,
               existingCharacterNames,
+              bookId: book.id,
+              onCacheHit: onCacheHit,
             );
 
             // Update character profiles with new information
@@ -1622,8 +1720,10 @@ Concise summary:''';
     String text,
     String? chapterTitle,
     String language,
-    Set<String> existingCharacterNames,
-  ) async {
+    Set<String> existingCharacterNames, {
+    String? bookId,
+    VoidCallback? onCacheHit,
+  }) async {
     try {
       // Limit text size based on service capabilities
       final maxLength = _chunkConfig.safeChunkTokens * 4; // Rough char estimate
@@ -1635,7 +1735,12 @@ Concise summary:''';
       final prompt = _buildCharacterExtractionPrompt(safeText, language);
 
       try {
-        final response = await _baseSummaryService.generateSummary(prompt, language);
+        final response = await _baseSummaryService.generateSummary(
+          prompt,
+          language,
+          bookId: bookId,
+          onCacheHit: onCacheHit,
+        );
         
         // Parse the response to extract character notes
         return _parseCharacterNotesFromStructuredResponse(response);
@@ -2000,14 +2105,23 @@ Concise summary:''';
 
   Future<void> resetGeneralSummary(String bookId) async {
     await _dbService.clearGeneralSummary(bookId);
+    // Clear API cache for this book
+    final apiCacheService = ApiCacheService();
+    await apiCacheService.clearCacheForBook(bookId);
   }
 
   Future<void> resetSinceLastTimeSummary(String bookId) async {
     await _dbService.clearSinceLastTimeSummary(bookId);
+    // Clear API cache for this book
+    final apiCacheService = ApiCacheService();
+    await apiCacheService.clearCacheForBook(bookId);
   }
 
   Future<void> resetCharactersSummary(String bookId) async {
     await _dbService.clearCharactersSummary(bookId);
+    // Clear API cache for this book
+    final apiCacheService = ApiCacheService();
+    await apiCacheService.clearCacheForBook(bookId);
   }
 
   Future<void> resetAllSummaries() async {

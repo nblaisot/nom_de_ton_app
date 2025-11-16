@@ -266,6 +266,12 @@ abstract class AppLocalizations {
   /// **'Summary'**
   String get summary;
 
+  /// Section header for summary-related actions
+  ///
+  /// In en, this message translates to:
+  /// **'Summaries'**
+  String get summariesSectionTitle;
+
   /// Back to library menu item
   ///
   /// In en, this message translates to:
@@ -319,6 +325,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Summaries reset'**
   String get summariesReset;
+
+  /// Message displayed when a summary is deleted
+  ///
+  /// In en, this message translates to:
+  /// **'Summary deleted'**
+  String get summaryDeleted;
 
   /// Error message when reset fails
   ///
@@ -740,6 +752,30 @@ abstract class AppLocalizations {
   /// **'Generating summary...'**
   String get generatingSummary;
 
+  /// Tooltip for resetting the current summary
+  ///
+  /// In en, this message translates to:
+  /// **'Reset this summary'**
+  String get summaryReset;
+
+  /// Status label shown while preparing summary generation
+  ///
+  /// In en, this message translates to:
+  /// **'Preparing...'**
+  String get summaryStatusPreparing;
+
+  /// Status label shown while calling the selected provider
+  ///
+  /// In en, this message translates to:
+  /// **'Calling {provider}...'**
+  String summaryStatusCalling(String provider);
+
+  /// Status message when summary is retrieved from cache
+  ///
+  /// In en, this message translates to:
+  /// **'Summary found in cache'**
+  String get summaryFoundInCache;
+
   /// Error generating summary message
   ///
   /// In en, this message translates to:
@@ -817,30 +853,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'French'**
   String get languageFrench;
-
-  /// Section header for summary-related actions
-  ///
-  /// In en, this message translates to:
-  /// **'Summaries'**
-  String get summariesSectionTitle;
-
-  /// Tooltip for resetting the current summary
-  ///
-  /// In en, this message translates to:
-  /// **'Reset this summary'**
-  String get summaryReset;
-
-  /// Status label shown while preparing summary generation
-  ///
-  /// In en, this message translates to:
-  /// **'Preparing...'**
-  String get summaryStatusPreparing;
-
-  /// Status label shown while calling the selected provider
-  ///
-  /// In en, this message translates to:
-  /// **'Calling {provider}...'**
-  String summaryStatusCalling(Object provider);
 
   /// Summary type option - from beginning
   ///

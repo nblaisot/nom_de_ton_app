@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 /// Abstract service for generating book summaries
 /// 
 /// This interface allows for different implementations:
@@ -8,8 +10,15 @@ abstract class SummaryService {
   /// 
   /// [text] - The text content to summarize
   /// [language] - The language code ('fr' or 'en')
+  /// [bookId] - Optional book ID for caching purposes
+  /// [onCacheHit] - Optional callback called when response is retrieved from cache
   /// Returns the generated summary
-  Future<String> generateSummary(String text, String language);
+  Future<String> generateSummary(
+    String text,
+    String language, {
+    String? bookId,
+    VoidCallback? onCacheHit,
+  });
 
   /// Check if the service is available and ready to use
   Future<bool> isAvailable();

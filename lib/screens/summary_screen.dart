@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:memoreader/l10n/app_localizations.dart';
@@ -43,7 +44,12 @@ class _SummaryScreenState extends State<SummaryScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSummary();
+    // Defer _loadSummary to after the first frame so context is available
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _loadSummary();
+      }
+    });
     _loadFontSize();
   }
 
@@ -56,6 +62,9 @@ class _SummaryScreenState extends State<SummaryScreen> {
 
   Future<void> _loadSummary() async {
     final l10n = AppLocalizations.of(context)!;
+    
+    debugPrint('[SummaryScreen] _loadSummary called for summaryType: ${widget.summaryType}');
+    debugPrint('[SummaryScreen] Book ID: ${widget.book.id}, currentCharacterIndex: ${widget.progress.currentCharacterIndex}');
 
     setState(() {
       _isLoading = true;
@@ -66,11 +75,13 @@ class _SummaryScreenState extends State<SummaryScreen> {
       // Check if background generation is in progress and wait for it
       final backgroundService = BackgroundSummaryService();
       if (backgroundService.isGenerationInProgress(widget.book.id)) {
+        debugPrint('[SummaryScreen] Background generation in progress, waiting...');
         // Wait for background generation to complete (with timeout)
         await Future.any([
           backgroundService.waitForGeneration(widget.book.id),
           Future.delayed(const Duration(seconds: 30)), // Timeout after 30 seconds
         ]);
+        debugPrint('[SummaryScreen] Background generation wait completed');
       }
 
       // Get app language
@@ -78,35 +89,56 @@ class _SummaryScreenState extends State<SummaryScreen> {
       final languageCode = appLocale.languageCode;
       final summaryType = widget.summaryType;
 
+      debugPrint('[SummaryScreen] Language code: $languageCode, calling summary service...');
+      
+      // Track if we get a cache hit
+      bool cacheHitDetected = false;
+      final cacheHitCallback = () {
+        cacheHitDetected = true;
+        if (mounted) {
+          _updateStatusMessage(l10n.summaryFoundInCache);
+        }
+      };
+
       _updateStatusMessage(
         l10n.summaryStatusCalling(widget.enhancedSummaryService.serviceName),
       );
 
       String summary;
       if (summaryType == SummaryType.sinceLastTime) {
+        debugPrint('[SummaryScreen] Calling getSummarySinceLastTime...');
         summary = await widget.enhancedSummaryService.getSummarySinceLastTime(
           widget.book,
           widget.progress,
           languageCode,
           preparedEngineText: widget.engineFullText,
+          onCacheHit: cacheHitCallback,
         );
+        debugPrint('[SummaryScreen] getSummarySinceLastTime completed, summary length: ${summary.length}');
       } else if (summaryType == SummaryType.characters) {
+        debugPrint('[SummaryScreen] Calling getCharactersSummary...');
         summary = await widget.enhancedSummaryService.getCharactersSummary(
           widget.book,
           widget.progress,
           languageCode,
           preparedEngineText: widget.engineFullText,
+          onCacheHit: cacheHitCallback,
         );
+        debugPrint('[SummaryScreen] getCharactersSummary completed, summary length: ${summary.length}');
       } else {
+        debugPrint('[SummaryScreen] Calling getSummaryUpToPosition...');
         summary = await widget.enhancedSummaryService.getSummaryUpToPosition(
           widget.book,
           widget.progress,
           languageCode,
           preparedEngineText: widget.engineFullText,
+          onCacheHit: cacheHitCallback,
         );
+        debugPrint('[SummaryScreen] getSummaryUpToPosition completed, summary length: ${summary.length}');
       }
 
       // Update last summary view position
+      debugPrint('[SummaryScreen] Updating last summary view position...');
       final characterIndex = widget.progress.currentCharacterIndex ?? 0;
       final chunkIndex =
           EnhancedSummaryService.computeChunkIndexForCharacterStatic(characterIndex);
@@ -114,15 +146,20 @@ class _SummaryScreenState extends State<SummaryScreen> {
         widget.book.id,
         chunkIndex,
       );
+      debugPrint('[SummaryScreen] Last summary view position updated');
 
       if (mounted) {
+        debugPrint('[SummaryScreen] Setting state with summary (length: ${summary.length})');
         setState(() {
           _summary = summary;
           _isLoading = false;
           _statusMessage = null;
         });
+        debugPrint('[SummaryScreen] State updated, loading complete');
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('[SummaryScreen] Error in _loadSummary: $e');
+      debugPrint('[SummaryScreen] Stack trace: $stackTrace');
       if (mounted) {
         final errorMessage = e.toString();
         String userFriendlyMessage;
@@ -136,6 +173,7 @@ class _SummaryScreenState extends State<SummaryScreen> {
           userFriendlyMessage = 'Error generating summary: $errorMessage\n\nIf this persists, please check your API key configuration in settings.';
         }
 
+        debugPrint('[SummaryScreen] Setting error state: $userFriendlyMessage');
         setState(() {
           _summary = userFriendlyMessage;
           _isLoading = false;
@@ -165,12 +203,8 @@ class _SummaryScreenState extends State<SummaryScreen> {
     if (_isLoading) return;
     final l10n = AppLocalizations.of(context)!;
 
-    setState(() {
-      _isLoading = true;
-      _statusMessage = l10n.summaryStatusPreparing;
-    });
-
     try {
+      // Clear the cache for the specific summary type
       switch (widget.summaryType) {
         case SummaryType.fromBeginning:
           await widget.enhancedSummaryService
@@ -186,19 +220,27 @@ class _SummaryScreenState extends State<SummaryScreen> {
           break;
       }
 
-      await _loadSummary();
+      // Close the summary screen and show toast message
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(l10n.summaryReset)),
-        );
+        // Get the messenger before popping - it will use the root ScaffoldMessenger
+        final messenger = ScaffoldMessenger.of(context);
+        
+        // Pop the summary screen
+        Navigator.of(context).pop();
+        
+        // Show toast message after the screen is popped
+        // Using post-frame callback ensures the reader screen is active
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(l10n.summaryDeleted),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        });
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-        _statusMessage = null;
-        _summary = e.toString();
-      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(l10n.resetSummariesError)),
       );

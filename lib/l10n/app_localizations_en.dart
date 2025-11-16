@@ -105,6 +105,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get summary => 'Summary';
 
   @override
+  String get summariesSectionTitle => 'Summaries';
+
+  @override
   String get backToLibrary => 'Back to Library';
 
   @override
@@ -134,6 +137,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get summariesReset => 'Summaries reset';
+
+  @override
+  String get summaryDeleted => 'Summary deleted';
 
   @override
   String get resetSummariesError =>
@@ -373,6 +379,20 @@ class AppLocalizationsEn extends AppLocalizations {
   String get generatingSummary => 'Generating summary...';
 
   @override
+  String get summaryReset => 'Reset this summary';
+
+  @override
+  String get summaryStatusPreparing => 'Preparing...';
+
+  @override
+  String summaryStatusCalling(String provider) {
+    return 'Calling $provider...';
+  }
+
+  @override
+  String get summaryFoundInCache => 'Summary found in cache';
+
+  @override
   String errorGeneratingSummary(String error) {
     return 'Error generating summary: $error';
   }
@@ -417,18 +437,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get languageFrench => 'French';
-
-  @override
-  String get summariesSectionTitle => 'Summaries';
-
-  @override
-  String get summaryReset => 'Reset this summary';
-
-  @override
-  String get summaryStatusPreparing => 'Preparing...';
-
-  @override
-  String summaryStatusCalling(Object provider) => 'Calling $provider...';
 
   @override
   String get summaryFromBeginning => 'From the Beginning';

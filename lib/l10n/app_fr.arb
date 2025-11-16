@@ -112,6 +112,10 @@
   "@summariesReset": {
     "description": "Message après la réinitialisation des résumés"
   },
+  "summaryDeleted": "Résumé supprimé",
+  "@summaryDeleted": {
+    "description": "Message affiché lorsqu'un résumé est supprimé"
+  },
   "resetSummariesError": "Impossible de réinitialiser les résumés. Veuillez réessayer.",
   "@resetSummariesError": {
     "description": "Message d'erreur si la réinitialisation échoue"
@@ -244,11 +248,16 @@
   "summaryStatusPreparing": "Préparation...",
   "summaryStatusCalling": "Appel de {provider}...",
   "@summaryStatusCalling": {
+    "description": "Message de statut lors de l'appel du fournisseur de résumé",
     "placeholders": {
       "provider": {
         "type": "String"
       }
     }
+  },
+  "summaryFoundInCache": "Résumé trouvé dans le cache",
+  "@summaryFoundInCache": {
+    "description": "Message de statut lorsque le résumé est récupéré du cache"
   },
   "errorGeneratingSummary": "Erreur lors de la génération du résumé : {error}",
   "@errorGeneratingSummary": {
