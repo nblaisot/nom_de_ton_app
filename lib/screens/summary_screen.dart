@@ -139,9 +139,12 @@ class _SummaryScreenState extends State<SummaryScreen> {
       }
 
       // Update last summary view position
+      final characterIndex = widget.progress.currentCharacterIndex ?? 0;
+      final chunkIndex =
+          EnhancedSummaryService.computeChunkIndexForCharacterStatic(characterIndex);
       await widget.enhancedSummaryService.updateLastSummaryView(
         widget.book.id,
-        widget.progress.currentChapterIndex ?? 0,
+        chunkIndex,
       );
 
       if (mounted) {

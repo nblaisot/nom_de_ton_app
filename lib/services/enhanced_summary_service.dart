@@ -19,7 +19,6 @@ import 'summary_service.dart';
 import 'openai_summary_service.dart';
 import 'prompt_config_service.dart';
 import '../utils/html_text_extractor.dart';
-import '../utils/text_tokenizer.dart';
 
 /// Represents text extracted from a chapter, possibly truncated.
 class ChapterText {
@@ -236,63 +235,6 @@ class EnhancedSummaryService {
   /// Extract text from book up to a specific character index
   /// This is the new method that uses characterIndex instead of wordIndex
   Future<List<ChapterText>> _extractTextUpToCharacterIndex(
-    Book book,
-    int targetCharacterIndex,
-  ) async {
-    final epub = await _bookService.loadEpubBook(book.filePath);
-    final chapters = _parseChapters(epub);
-    
-    if (chapters.isEmpty) {
-      return [];
-    }
-
-    final result = <ChapterText>[];
-    int currentCharacterCount = 0;
-
-    for (final chapter in chapters) {
-      final htmlText = chapter.htmlContent;
-      final plainText = _extractTextFromHtml(htmlText);
-      
-      if (plainText.isEmpty) continue;
-
-      final chapterCharacterCount = plainText.length;
-
-      if (currentCharacterCount + chapterCharacterCount <= targetCharacterIndex) {
-        // Entire chapter fits
-        result.add(ChapterText(
-          chapterIndex: chapter.index,
-          title: chapter.title,
-          text: plainText,
-          isComplete: true,
-        ));
-        currentCharacterCount += chapterCharacterCount;
-      } else {
-        // Partial chapter - extract only up to targetCharacterIndex
-        final remainingCharacters = targetCharacterIndex - currentCharacterCount;
-        if (remainingCharacters > 0) {
-          final partialText = plainText.substring(0, remainingCharacters);
-          result.add(ChapterText(
-            chapterIndex: chapter.index,
-            title: chapter.title,
-            text: partialText,
-            isComplete: false,
-          ));
-        }
-        break; // We've reached the target
-      }
-    }
-
-    return result;
-  }
-
-  int? _normalizeLegacyWordIndex(int? index) {
-    if (index == null) {
-      return null;
-    }
-    return math.max(0, index);
-  }
-
-  Future<_ResolvedProgressPosition> _resolveProgressPosition(
     Book book,
     ReadingProgress progress,
   ) async {
@@ -539,13 +481,11 @@ class EnhancedSummaryService {
     String language, {
     bool ensureChunkSummaries = true,
     double? readingProgressFraction,
-    List<ChapterText>? precomputedChapterTexts,
   }) async {
-    final chapterTexts = precomputedChapterTexts ??
-        await _extractTextUpToCharacterIndex(
-          book,
-          targetCharacterIndex,
-        );
+    final chapterTexts = await _extractTextUpToCharacterIndex(
+      book,
+      targetCharacterIndex,
+    );
 
     if (chapterTexts.isEmpty) {
       return const _PreparedTextData(
@@ -784,7 +724,7 @@ class EnhancedSummaryService {
       return null;
     }
     final percent = (fraction * 100).clamp(0, 100);
-    return (percent is double) ? percent : (percent as num).toDouble();
+    return percent;
   }
 
   String _extractLastWords(String text, int wordCount) {
@@ -1277,8 +1217,9 @@ class EnhancedSummaryService {
     String languageCode,
   ) async {
     try {
-      final resolvedPosition = await _resolveProgressPosition(book, progress);
-      final currentCharacterIndex = resolvedPosition.characterIndex;
+      // Summaries now rely solely on exact character offsets; when none are
+      // available we consider the user to be at the very beginning.
+      final currentCharacterIndex = math.max(0, progress.currentCharacterIndex ?? 0);
       final language = _getLanguage(languageCode);
 
       if (currentCharacterIndex <= 0) {
@@ -1291,7 +1232,6 @@ class EnhancedSummaryService {
         language,
         ensureChunkSummaries: true,
         readingProgressFraction: progress.progress,
-        precomputedChapterTexts: resolvedPosition.preparedChapterTexts,
       );
 
       if (prepared.fullText.isEmpty) {
@@ -1379,81 +1319,28 @@ class EnhancedSummaryService {
     try {
       final language = _getLanguage(languageCode);
       final cache = await _dbService.getSummaryCache(book.id);
+      // Use the same exact character window as the "from the beginning" summary
+      // to avoid drift between different summary modes.
+      final currentCharacterIndex = math.max(0, progress.currentCharacterIndex ?? 0);
 
-      final normalizedProgressWordIndex =
-          progress.currentCharacterIndex == null
-              ? _normalizeLegacyWordIndex(progress.currentWordIndex)
-              : null;
-      final normalizedLastReadingStopWordIndex =
-          cache?.lastReadingStopCharacterIndex == null
-              ? _normalizeLegacyWordIndex(cache?.lastReadingStopWordIndex)
-              : null;
-      final normalizedPreviousReadingStopWordIndex =
-          cache?.previousReadingStopCharacterIndex == null
-              ? _normalizeLegacyWordIndex(cache?.previousReadingStopWordIndex)
-              : null;
-      final normalizedCachedSinceLastTimeWordIndex =
-          cache?.summarySinceLastTimeCharacterIndex == null
-              ? _normalizeLegacyWordIndex(cache?.summarySinceLastTimeWordIndex)
-              : null;
-
-      final wordIndexesToResolve = <int>{};
-      if (normalizedProgressWordIndex != null) {
-        wordIndexesToResolve.add(normalizedProgressWordIndex);
+      if (currentCharacterIndex <= 0) {
+        return language == 'fr'
+            ? 'Aucune lecture détectée.'
+            : 'No reading progress detected.';
       }
-      if (normalizedLastReadingStopWordIndex != null) {
-        wordIndexesToResolve.add(normalizedLastReadingStopWordIndex);
-      }
-      if (normalizedPreviousReadingStopWordIndex != null) {
-        wordIndexesToResolve.add(normalizedPreviousReadingStopWordIndex);
-      }
-      if (normalizedCachedSinceLastTimeWordIndex != null) {
-        wordIndexesToResolve.add(normalizedCachedSinceLastTimeWordIndex);
-      }
-
-      final conversionResult = wordIndexesToResolve.isNotEmpty
-          ? await _resolveWordIndexesToCharacterOffsets(
-              book,
-              wordIndexesToResolve,
-              captureChapterTextsFor: normalizedProgressWordIndex,
-            )
-          : const _WordIndexConversionResult(
-              wordToCharacterIndex: <int, int>{},
-              capturedChapterTexts: null,
-            );
-
-      final wordToChar = conversionResult.wordToCharacterIndex;
-      final resolvedChapterTexts = conversionResult.capturedChapterTexts;
-
-      final currentCharacterIndex = progress.currentCharacterIndex ??
-          (normalizedProgressWordIndex != null
-              ? wordToChar[normalizedProgressWordIndex] ?? 0
-              : 0);
 
       final prepared = await _prepareTextData(
         book,
         currentCharacterIndex,
         language,
         readingProgressFraction: progress.progress,
-        precomputedChapterTexts: resolvedChapterTexts,
       );
 
-      final lastReadingStopCharacterIndex = cache?.lastReadingStopCharacterIndex ??
-          (normalizedLastReadingStopWordIndex != null
-              ? wordToChar[normalizedLastReadingStopWordIndex]
-              : null);
+      final lastReadingStopCharacterIndex = cache?.lastReadingStopCharacterIndex;
       final lastReadingStopTimestamp = cache?.lastReadingStopTimestamp;
-      final previousReadingStopCharacterIndex =
-          cache?.previousReadingStopCharacterIndex ??
-              (normalizedPreviousReadingStopWordIndex != null
-                  ? wordToChar[normalizedPreviousReadingStopWordIndex]
-                  : null);
-
+      final previousReadingStopCharacterIndex = cache?.previousReadingStopCharacterIndex;
       final cachedSinceLastTimeCharacterIndex =
-          cache?.summarySinceLastTimeCharacterIndex ??
-              (normalizedCachedSinceLastTimeWordIndex != null
-                  ? wordToChar[normalizedCachedSinceLastTimeWordIndex]
-                  : null);
+          cache?.summarySinceLastTimeCharacterIndex;
       if (cache != null &&
           cache.summarySinceLastTime != null &&
           cachedSinceLastTimeCharacterIndex == currentCharacterIndex &&
@@ -1710,8 +1597,7 @@ class EnhancedSummaryService {
     String languageCode,
   ) async {
     try {
-      final resolvedPosition = await _resolveProgressPosition(book, progress);
-      final currentCharacterIndex = resolvedPosition.characterIndex;
+      final currentCharacterIndex = math.max(0, progress.currentCharacterIndex ?? 0);
       final language = _getLanguage(languageCode);
 
       if (currentCharacterIndex <= 0) {
@@ -1723,7 +1609,6 @@ class EnhancedSummaryService {
         currentCharacterIndex,
         language,
         readingProgressFraction: progress.progress,
-        precomputedChapterTexts: resolvedPosition.preparedChapterTexts,
       );
 
       if (prepared.fullText.isEmpty) {
@@ -2213,13 +2098,11 @@ class EnhancedSummaryService {
     String bookId, {
     required int chunkIndex,
     required int characterIndex,
-    int? wordIndex,
   }) async {
     await _dbService.updateLastReadingStop(
       bookId,
       chunkIndex: chunkIndex,
       characterIndex: characterIndex,
-      wordIndex: wordIndex,
     );
   }
 

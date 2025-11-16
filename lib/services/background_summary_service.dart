@@ -95,57 +95,26 @@ class BackgroundSummaryService {
   /// Check if summary generation is needed
   Future<bool> _needsGeneration(Book book, ReadingProgress progress) async {
     try {
-      final currentCharIndex = progress.currentCharacterIndex;
-      final currentWordIndex = progress.currentWordIndex;
-      final currentChunkIndex = currentCharIndex != null
-          ? EnhancedSummaryService.computeChunkIndexForCharacterStatic(currentCharIndex)
-          : currentWordIndex != null
-              ? EnhancedSummaryService.computeChunkIndexForCharacterStatic(currentWordIndex * 6)
-              : progress.currentChapterIndex ?? 0;
-
-      final hasProgress = (currentCharIndex != null && currentCharIndex > 0) ||
-          (currentWordIndex != null && currentWordIndex > 0) ||
-          currentChunkIndex > 0;
-
-      // If no progress, no generation needed
-      if (!hasProgress) {
+      final currentCharIndex = progress.currentCharacterIndex ?? 0;
+      if (currentCharIndex <= 0) {
+        // Nothing has been read yet with the new progress system.
         return false;
       }
+
+      final currentChunkIndex =
+          EnhancedSummaryService.computeChunkIndexForCharacterStatic(currentCharIndex);
 
       // Check if we have up-to-date summaries
       final cache = await _dbService.getSummaryCache(book.id);
       if (cache != null) {
-        bool summaryUpToDate;
-        if (currentCharIndex != null) {
-          summaryUpToDate = cache.lastProcessedCharacterIndex != null &&
-              cache.lastProcessedCharacterIndex! >= currentCharIndex &&
-              cache.cumulativeSummary.isNotEmpty;
-        } else if (currentWordIndex != null) {
-          summaryUpToDate = cache.lastProcessedWordIndex != null &&
-              cache.lastProcessedWordIndex! >= currentWordIndex &&
-              cache.cumulativeSummary.isNotEmpty;
-        } else {
-          summaryUpToDate = cache.lastProcessedChunkIndex >= currentChunkIndex &&
-              cache.cumulativeSummary.isNotEmpty;
-        }
+        final summaryUpToDate = cache.lastProcessedCharacterIndex != null &&
+            cache.lastProcessedCharacterIndex! >= currentCharIndex &&
+            cache.cumulativeSummary.isNotEmpty;
 
-        bool charactersUpToDate;
-        if (currentCharIndex != null) {
-          charactersUpToDate = cache.charactersSummaryCharacterIndex != null &&
-              cache.charactersSummaryCharacterIndex! >= currentCharIndex &&
-              cache.charactersSummary != null &&
-              cache.charactersSummary!.isNotEmpty;
-        } else if (currentWordIndex != null) {
-          charactersUpToDate = cache.charactersSummaryWordIndex != null &&
-              cache.charactersSummaryWordIndex! >= currentWordIndex &&
-              cache.charactersSummary != null &&
-              cache.charactersSummary!.isNotEmpty;
-        } else {
-          charactersUpToDate = cache.charactersSummaryChunkIndex != null &&
-              cache.charactersSummaryChunkIndex! >= currentChunkIndex &&
-              cache.charactersSummary != null &&
-              cache.charactersSummary!.isNotEmpty;
-        }
+        final charactersUpToDate = cache.charactersSummaryCharacterIndex != null &&
+            cache.charactersSummaryCharacterIndex! >= currentCharIndex &&
+            cache.charactersSummary != null &&
+            cache.charactersSummary!.isNotEmpty;
 
         // If both are up to date, no generation needed
         if (summaryUpToDate && charactersUpToDate) {
@@ -252,9 +221,11 @@ class BackgroundSummaryService {
       
       for (final book in books) {
         final progress = await _bookService.getReadingProgress(book.id);
-        if (progress != null && progress.currentChapterIndex != null && progress.currentChapterIndex! > 0) {
+        final hasCharacterProgress =
+            progress != null && (progress.currentCharacterIndex ?? 0) > 0;
+        if (hasCharacterProgress) {
           // Generate in background without waiting
-          generateSummariesIfNeeded(book, progress, languageCode);
+          generateSummariesIfNeeded(book, progress!, languageCode);
         }
       }
     } catch (e) {
