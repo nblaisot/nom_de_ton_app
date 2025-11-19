@@ -49,6 +49,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
   static const double _defaultVerticalPadding = 50.0; // Default vertical padding
   static const double _paragraphSpacing = 18.0;
   static const double _headingSpacing = 28.0;
+  static const double _defaultReaderFontSize = 18.0;
 
   final BookService _bookService = BookService();
   final SettingsService _settingsService = SettingsService();
@@ -80,7 +81,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
   String? _errorMessage;
 
   bool _showProgressBar = false;
-  double _fontSize = 18.0;
+  ReaderFontScalePreset _fontScalePreset = ReaderFontScalePreset.normal;
 
   ReadingProgress? _savedProgress;
   Timer? _progressDebounce;
@@ -103,6 +104,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     WakelockPlus.enable();
     _initializeSummaryService();
     _loadVerticalPadding();
+    _loadFontScalePreset();
     _loadBook();
     unawaited(_appStateService.setLastOpenedBook(widget.book.id));
   }
@@ -340,12 +342,12 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     final textHeightBehavior = DefaultTextHeightBehavior.maybeOf(context) ??
         const TextHeightBehavior();
     final baseStyle = theme.textTheme.bodyMedium?.copyWith(
-          fontSize: _fontSize,
+          fontSize: _effectiveFontSize,
           height: 1.6,
           color: baseColor,
         ) ??
         TextStyle(
-          fontSize: _fontSize,
+          fontSize: _effectiveFontSize,
           height: 1.6,
           color: baseColor,
         );
@@ -523,11 +525,66 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     }
   }
 
-  void _changeFontSize(double value) {
+  double get _effectiveFontSize =>
+      _defaultReaderFontSize * _fontScaleMultiplier;
+
+  double get _fontScaleMultiplier {
+    switch (_fontScalePreset) {
+      case ReaderFontScalePreset.decrease:
+        return 0.9;
+      case ReaderFontScalePreset.increase:
+        return 1.1;
+      case ReaderFontScalePreset.normal:
+      default:
+        return 1.0;
+    }
+  }
+
+  Future<void> _loadFontScalePreset() async {
+    final storedValue = await _settingsService.getReaderFontScalePreset();
+    final preset = _fontScalePresetFromStorage(storedValue);
+    if (mounted) {
+      setState(() {
+        _fontScalePreset = preset;
+      });
+      if (_docBlocks.isNotEmpty) {
+        _scheduleRepagination(retainCurrentPage: true);
+      }
+    }
+  }
+
+  void _changeFontScale(ReaderFontScalePreset preset) {
+    if (_fontScalePreset == preset) {
+      return;
+    }
     setState(() {
-      _fontSize = value;
+      _fontScalePreset = preset;
     });
+    unawaited(
+        _settingsService.saveReaderFontScalePreset(_fontScalePresetToStorage(preset)));
     _scheduleRepagination(retainCurrentPage: true);
+  }
+
+  int _fontScalePresetToStorage(ReaderFontScalePreset preset) {
+    switch (preset) {
+      case ReaderFontScalePreset.decrease:
+        return -1;
+      case ReaderFontScalePreset.increase:
+        return 1;
+      case ReaderFontScalePreset.normal:
+      default:
+        return 0;
+    }
+  }
+
+  ReaderFontScalePreset _fontScalePresetFromStorage(int value) {
+    if (value <= -1) {
+      return ReaderFontScalePreset.decrease;
+    }
+    if (value >= 1) {
+      return ReaderFontScalePreset.increase;
+    }
+    return ReaderFontScalePreset.normal;
   }
 
   Future<bool> _goToNextPage({bool resetPager = true}) async {
@@ -960,8 +1017,8 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
   void _openReadingMenu() {
     unawaited(showReaderMenu(
       context: context,
-      fontSize: _fontSize,
-      onFontSizeChanged: _changeFontSize,
+      fontScalePreset: _fontScalePreset,
+      onFontScaleChanged: _changeFontScale,
       hasChapters: _chapterEntries.isNotEmpty,
       onGoToChapter: _showChapterSelector,
       onGoToPercentage: _showGoToPercentageDialog,
