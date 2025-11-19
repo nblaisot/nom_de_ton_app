@@ -3,11 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:memoreader/l10n/app_localizations.dart';
 
+enum ReaderFontScalePreset { decrease, normal, increase }
+
 /// Displays the reader menu as a modal sheet that slides from the top.
 Future<void> showReaderMenu({
   required BuildContext context,
-  required double fontSize,
-  required ValueChanged<double> onFontSizeChanged,
+  required ReaderFontScalePreset fontScalePreset,
+  required ValueChanged<ReaderFontScalePreset> onFontScaleChanged,
   required bool hasChapters,
   required VoidCallback onGoToChapter,
   required VoidCallback onGoToPercentage,
@@ -33,8 +35,8 @@ Future<void> showReaderMenu({
       }
 
       return _ReaderMenuDialog(
-        fontSize: fontSize,
-        onFontSizeChanged: onFontSizeChanged,
+        fontScalePreset: fontScalePreset,
+        onFontScaleChanged: onFontScaleChanged,
         hasChapters: hasChapters,
         onGoToChapter: () => handleAction(onGoToChapter),
         onGoToPercentage: () => handleAction(onGoToPercentage),
@@ -66,8 +68,8 @@ Future<void> showReaderMenu({
 
 class _ReaderMenuDialog extends StatefulWidget {
   const _ReaderMenuDialog({
-    required this.fontSize,
-    required this.onFontSizeChanged,
+    required this.fontScalePreset,
+    required this.onFontScaleChanged,
     required this.hasChapters,
     required this.onGoToChapter,
     required this.onGoToPercentage,
@@ -77,8 +79,8 @@ class _ReaderMenuDialog extends StatefulWidget {
     required this.onReturnToLibrary,
   });
 
-  final double fontSize;
-  final ValueChanged<double> onFontSizeChanged;
+  final ReaderFontScalePreset fontScalePreset;
+  final ValueChanged<ReaderFontScalePreset> onFontScaleChanged;
   final bool hasChapters;
   final VoidCallback onGoToChapter;
   final VoidCallback onGoToPercentage;
@@ -92,12 +94,12 @@ class _ReaderMenuDialog extends StatefulWidget {
 }
 
 class _ReaderMenuDialogState extends State<_ReaderMenuDialog> {
-  late double _sliderValue;
+  late ReaderFontScalePreset _selectedPreset;
 
   @override
   void initState() {
     super.initState();
-    _sliderValue = widget.fontSize;
+    _selectedPreset = widget.fontScalePreset;
   }
 
   @override
@@ -147,16 +149,13 @@ class _ReaderMenuDialogState extends State<_ReaderMenuDialog> {
                       ],
                     ),
                     const SizedBox(height: 16),
-                    Text('Taille du texte : ${_sliderValue.toStringAsFixed(0)} pt'),
-                    Slider(
-                      min: 14,
-                      max: 30,
-                      divisions: 16,
-                      label: '${_sliderValue.toStringAsFixed(0)} pt',
-                      value: _sliderValue,
-                      onChanged: (value) {
-                        setState(() => _sliderValue = value);
-                        widget.onFontSizeChanged(value);
+                    Text('Taille du texte'),
+                    const SizedBox(height: 8),
+                    _FontScaleSelector(
+                      selectedPreset: _selectedPreset,
+                      onPresetChanged: (preset) {
+                        setState(() => _selectedPreset = preset);
+                        widget.onFontScaleChanged(preset);
                       },
                     ),
                     const SizedBox(height: 8),
@@ -210,6 +209,41 @@ class _ReaderMenuDialogState extends State<_ReaderMenuDialog> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _FontScaleSelector extends StatelessWidget {
+  const _FontScaleSelector({
+    required this.selectedPreset,
+    required this.onPresetChanged,
+  });
+
+  final ReaderFontScalePreset selectedPreset;
+  final ValueChanged<ReaderFontScalePreset> onPresetChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final presets = ReaderFontScalePreset.values;
+    final labels = <ReaderFontScalePreset, String>{
+      ReaderFontScalePreset.decrease: '-',
+      ReaderFontScalePreset.normal: 'Normal',
+      ReaderFontScalePreset.increase: '+',
+    };
+    final isSelected = presets.map((preset) => preset == selectedPreset).toList();
+    return Center(
+      child: ToggleButtons(
+        isSelected: isSelected,
+        borderRadius: BorderRadius.circular(12),
+        constraints: const BoxConstraints(minHeight: 40, minWidth: 60),
+        onPressed: (index) => onPresetChanged(presets[index]),
+        children: presets
+            .map((preset) => Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text(labels[preset]!)),
+                )
+            .toList(),
       ),
     );
   }

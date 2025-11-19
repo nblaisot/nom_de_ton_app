@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class SettingsService {
   static const String _languageKey = 'selected_language';
   static const String _fontSizeKey = 'font_size';
+  static const String _readerFontScaleKey = 'reader_font_scale';
   static const String _horizontalPaddingKey = 'horizontal_padding';
   static const String _verticalPaddingKey = 'vertical_padding';
   static const double _defaultFontSize = 18.0;
@@ -54,6 +55,18 @@ class SettingsService {
     // Clamp font size to valid range
     final clampedSize = fontSize.clamp(_minFontSize, _maxFontSize);
     await prefs.setDouble(_fontSizeKey, clampedSize);
+  }
+
+  /// Load the reader font scale preset (-1 = smaller, 0 = normal, 1 = larger)
+  Future<int> getReaderFontScalePreset() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_readerFontScaleKey) ?? 0;
+  }
+
+  /// Persist the reader font scale preset (-1 = smaller, 0 = normal, 1 = larger)
+  Future<void> saveReaderFontScalePreset(int preset) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_readerFontScaleKey, preset.clamp(-1, 1));
   }
 
   /// Get min font size
