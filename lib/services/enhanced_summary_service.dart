@@ -971,14 +971,25 @@ class EnhancedSummaryService {
     // Build narrative from chunk summaries
     final summaryTexts = chunks.map((c) => c.summaryText).toList();
     
+    // Separate the last chunk to preserve it with more details
+    String? lastChunkSummary;
+    List<String> summariesToSynthesize;
+    if (summaryTexts.length > 1) {
+      lastChunkSummary = summaryTexts.last;
+      summariesToSynthesize = summaryTexts.sublist(0, summaryTexts.length - 1);
+    } else {
+      summariesToSynthesize = summaryTexts;
+      lastChunkSummary = null;
+    }
+    
     // For large books, create a hierarchical summary
     String narrative;
-    if (summaryTexts.length > _maxChunksPerBatch) {
+    if (summariesToSynthesize.length > _maxChunksPerBatch) {
       // Process in batches to avoid overwhelming the LLM
       final batches = <List<String>>[];
-      for (int i = 0; i < summaryTexts.length; i += _maxChunksPerBatch) {
-        final end = math.min(i + _maxChunksPerBatch, summaryTexts.length);
-        batches.add(summaryTexts.sublist(i, end));
+      for (int i = 0; i < summariesToSynthesize.length; i += _maxChunksPerBatch) {
+        final end = math.min(i + _maxChunksPerBatch, summariesToSynthesize.length);
+        batches.add(summariesToSynthesize.sublist(i, end));
       }
 
       // Summarize each batch
@@ -1002,15 +1013,24 @@ class EnhancedSummaryService {
         bookId: bookId,
         onCacheHit: onCacheHit,
       );
-    } else {
+    } else if (summariesToSynthesize.isNotEmpty) {
       // Small enough to process directly
       narrative = await _synthesizeNarrative(
-        summaryTexts,
+        summariesToSynthesize,
         bookTitle,
         language,
         bookId: bookId,
         onCacheHit: onCacheHit,
       );
+    } else {
+      // Only one chunk, use it directly
+      narrative = lastChunkSummary ?? '';
+    }
+    
+    // Append the last chunk summary with more details to ensure good connection with following text
+    if (lastChunkSummary != null && lastChunkSummary.trim().isNotEmpty) {
+      // Add the last chunk summary directly to preserve all details
+      narrative = '$narrative\n\n$lastChunkSummary';
     }
 
     return GeneralSummaryPayload(
@@ -2222,6 +2242,15 @@ Concise summary:''';
 
   Future<void> resetAllSummaries() async {
     await _dbService.clearAll();
+  }
+
+  /// Get all intermediate chunk summaries for a book (for debug purposes)
+  Future<List<BookSummaryChunk>> getAllIntermediateSummaries(String bookId) async {
+    final lastChunkIndex = await _dbService.getLastProcessedChunkIndex(bookId);
+    if (lastChunkIndex < 0) {
+      return [];
+    }
+    return await _dbService.getSummaryChunks(bookId, lastChunkIndex);
   }
 }
 

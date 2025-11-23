@@ -2,14 +2,14 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' show PointerDeviceKind;
-
 import 'package:epubx/epubx.dart';
-import 'package:flutter/gestures.dart' show PointerDownEvent, kPrimaryButton, kTouchSlop;
 import 'package:flutter/material.dart' as material;
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart'
+    show PointerCancelEvent, PointerDownEvent, PointerMoveEvent, PointerUpEvent, kPrimaryButton, kTouchSlop;
+import 'package:meta/meta.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
-import 'package:image/image.dart' as img show decodeImage;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -25,9 +25,10 @@ import '../services/summary_database_service.dart';
 import '../services/app_state_service.dart';
 import '../services/prompt_config_service.dart';
 import '../utils/html_text_extractor.dart';
+import '../utils/css_resolver.dart';
 import 'reader/document_model.dart';
 import 'reader/line_metrics_pagination_engine.dart';
-import 'reader/pagination_cache.dart';
+import 'reader/page_content_view.dart';
 import 'reader/tap_zones.dart';
 import 'reader/reader_menu.dart';
 import 'reader/navigation_helper.dart';
@@ -53,8 +54,6 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
 
   final BookService _bookService = BookService();
   final SettingsService _settingsService = SettingsService();
-  final PaginationCacheManager _paginationCacheManager =
-      const PaginationCacheManager();
   EnhancedSummaryService? _summaryService;
   final PageController _pageController = PageController(initialPage: 1);
   final AppStateService _appStateService = AppStateService();
@@ -81,20 +80,25 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
   String? _errorMessage;
 
   bool _showProgressBar = false;
-  ReaderFontScalePreset _fontScalePreset = ReaderFontScalePreset.normal;
+  double _fontScale = 1.0; // Font scale multiplier (1.0 = normal)
 
   ReadingProgress? _savedProgress;
   Timer? _progressDebounce;
+  // Text selection state management
+  // When a selection is active, tap-up events clear the selection instead of triggering actions
   bool _hasActiveSelection = false;
   bool _isProcessingSelection = false;
-  VoidCallback? _clearSelectionCallback;
-  DateTime? _lastSelectionChangeTimestamp;
+  VoidCallback? _clearSelectionCallback; // Callback to clear selection programmatically
+  DateTime? _lastSelectionChangeTimestamp; // Used to defer clearing selection (allow context menu)
+  int? _selectionOwnerPointer; // Pointer that initiated the current selection
   String? _selectionActionLabel;
   String? _selectionActionPrompt;
   Locale? _lastLocale;
   int? _activeTapPointer;
   Offset? _activeTapDownPosition;
+  DateTime? _activeTapDownTime;
   bool _activeTapExceededSlop = false;
+  static const Duration _longPressThreshold = Duration(milliseconds: 450);
 
   @override
   void initState() {
@@ -104,7 +108,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     WakelockPlus.enable();
     _initializeSummaryService();
     _loadVerticalPadding();
-    _loadFontScalePreset();
+    _loadFontScale();
     _loadBook();
     unawaited(_appStateService.setLastOpenedBook(widget.book.id));
   }
@@ -268,6 +272,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     if (!mounted || _docBlocks.isEmpty) return;
 
     Size? sizeForMetrics = actualSize ?? _lastActualSize;
+    if (!mounted) return;
     sizeForMetrics ??= MediaQuery.of(context).size;
     final baseMetrics = _computePageMetrics(context, sizeForMetrics);
     final metrics = _adjustForUserPadding(baseMetrics);
@@ -275,6 +280,7 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
     final previousEngine = _engine;
     previousEngine?.removeListener(_handleEngineUpdate);
 
+    if (!mounted) return;
     final engine = await LineMetricsPaginationEngine.create(
       bookId: widget.book.id,
       blocks: _docBlocks,
@@ -283,38 +289,47 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
       maxHeight: metrics.maxHeight,
       textHeightBehavior: metrics.textHeightBehavior,
       textScaler: metrics.textScaler,
-      cacheManager: _paginationCacheManager,
+      cacheManager: null,
       viewportInsetBottom: metrics.viewportBottomInset,
     );
 
+    if (!mounted) return;
     final targetPageIndex =
         await engine.ensurePageForCharacter(startCharIndex, windowRadius: 1);
     engine.addListener(_handleEngineUpdate);
     unawaited(engine.ensureWindow(targetPageIndex, radius: 1));
     unawaited(engine.startBackgroundPagination());
 
+    if (!mounted) return;
     final initialPage = engine.getPage(targetPageIndex);
     final updatedTotalChars = math.max(_totalCharacterCount, engine.totalCharacters);
 
-    setState(() {
-      _engine = engine;
-      _totalPages = engine.estimatedTotalPages;
-      _currentPageIndex = targetPageIndex;
-      _totalCharacterCount = updatedTotalChars;
-      if (initialPage != null) {
-        _currentCharacterIndex = initialPage.startCharIndex;
-        _progress =
-            _calculateProgressForPage(initialPage, totalChars: updatedTotalChars);
-      } else {
-        _currentCharacterIndex = 0;
-        _progress = 0;
-      }
-      _showProgressBar = false;
-    });
+    // Use SchedulerBinding to ensure we're not in a build phase
+    if (mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          _engine = engine;
+          _totalPages = engine.estimatedTotalPages;
+          _currentPageIndex = targetPageIndex;
+          _totalCharacterCount = updatedTotalChars;
+          if (initialPage != null) {
+            _currentCharacterIndex = initialPage.startCharIndex;
+            _progress =
+                _calculateProgressForPage(initialPage, totalChars: updatedTotalChars);
+          } else {
+            _currentCharacterIndex = 0;
+            _progress = 0;
+          }
+          _showProgressBar = false;
+        });
 
-    _resetPagerToCurrent();
-
-    _scheduleProgressSave();
+        if (mounted) {
+          _resetPagerToCurrent();
+          _scheduleProgressSave();
+        }
+      });
+    }
   }
 
 
@@ -389,53 +404,10 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     });
   }
 
-  bool _shouldTrackPointer(PointerDownEvent event) {
-    switch (event.kind) {
-      case PointerDeviceKind.mouse:
-        return (event.buttons & kPrimaryButton) != 0;
-      case PointerDeviceKind.touch:
-      case PointerDeviceKind.stylus:
-      case PointerDeviceKind.invertedStylus:
-      case PointerDeviceKind.unknown:
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  void _resetTapTracking() {
-    _activeTapPointer = null;
-    _activeTapDownPosition = null;
-    _activeTapExceededSlop = false;
-  }
-
   void _handleTapUp(TapUpDetails details) {
-    // Trigger page/menu/progress actions when the tap is released to avoid
-    // accidental activations from other gestures while keeping taps snappy.
-    if (_hasActiveSelection) {
-      final lastSelectionChange = _lastSelectionChangeTimestamp;
-      final shouldDeferClearing = lastSelectionChange != null &&
-          DateTime.now().difference(lastSelectionChange) <
-              const Duration(milliseconds: 250);
-
-      if (shouldDeferClearing) {
-        // Ignore the tap that ends an active selection gesture so the
-        // highlight stays visible and the context menu can be used.
-        return;
-      }
-
-      // Clear selection by deselecting
-      setState(() {
-        _hasActiveSelection = false;
-        _lastSelectionChangeTimestamp = null;
-      });
-      _clearSelectionCallback?.call();
-      _clearSelectionCallback = null;
-      return;
-    }
-
     final size = MediaQuery.of(context).size;
     final action = determineTapAction(details.globalPosition, size);
+    debugPrint('[ReaderScreen] TapUp -> $action at ${details.globalPosition}');
 
     switch (action) {
       case ReaderTapAction.showMenu:
@@ -462,14 +434,131 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     }
   }
 
+  void _resetTapTracking() {
+    _activeTapPointer = null;
+    _activeTapDownPosition = null;
+    _activeTapDownTime = null;
+    _activeTapExceededSlop = false;
+  }
+
+  void _handlePointerDown(PointerDownEvent event) {
+    if (!_shouldTrackPointer(event) || _activeTapPointer != null) {
+      return;
+    }
+    _activeTapPointer = event.pointer;
+    _activeTapDownPosition = event.position;
+    _activeTapDownTime = DateTime.now();
+    _activeTapExceededSlop = false;
+    debugPrint('[ReaderScreen] Pointer down (${event.pointer}) at ${event.position}');
+  }
+
+  void _handlePointerMove(PointerMoveEvent event) {
+    if (event.pointer != _activeTapPointer) return;
+    final downPosition = _activeTapDownPosition;
+    if (downPosition == null) return;
+    final distance = (event.position - downPosition).distance;
+    if (!_activeTapExceededSlop && distance > kTouchSlop) {
+      _activeTapExceededSlop = true;
+      debugPrint(
+          '[ReaderScreen] Pointer exceeded slop (distance=$distance) -> treat as drag/swipe');
+    }
+  }
+
+  void _handlePointerCancel(PointerCancelEvent event) {
+    if (event.pointer == _activeTapPointer) {
+      debugPrint('[ReaderScreen] Pointer cancel (${event.pointer})');
+      _resetTapTracking();
+    }
+  }
+
+  void _handlePointerUp(PointerUpEvent event) {
+    if (event.pointer != _activeTapPointer) {
+      return;
+    }
+
+    final now = DateTime.now();
+    final pressDuration =
+        _activeTapDownTime != null ? now.difference(_activeTapDownTime!) : null;
+    debugPrint(
+        '[ReaderScreen] Pointer up (${event.pointer}) duration=${pressDuration?.inMilliseconds}ms slopExceeded=$_activeTapExceededSlop hasSelection=$_hasActiveSelection');
+
+    if (_hasActiveSelection) {
+      final keepSelection = shouldKeepSelectionOnPointerUp(
+        hasSelection: _hasActiveSelection,
+        isSelectionOwnerPointer:
+            _selectionOwnerPointer != null && event.pointer == _selectionOwnerPointer,
+        slopExceeded: _activeTapExceededSlop,
+        pressDuration: pressDuration,
+        lastSelectionChangeTimestamp: _lastSelectionChangeTimestamp,
+        now: now,
+        longPressThreshold: _longPressThreshold,
+      );
+
+      if (keepSelection) {
+        debugPrint('[ReaderScreen] Keeping selection on tap');
+      } else {
+        debugPrint('[ReaderScreen] Clearing selection on tap');
+        _clearSelectionState();
+      }
+      _resetTapTracking();
+      return;
+    }
+
+    if (pressDuration != null && pressDuration >= _longPressThreshold) {
+      debugPrint('[ReaderScreen] Long press detected; skipping tap action to allow selection');
+      _resetTapTracking();
+      return;
+    }
+
+    if (_activeTapExceededSlop) {
+      _resetTapTracking();
+      return;
+    }
+
+    _handleTapIfAllowed(TapUpDetails(
+      globalPosition: event.position,
+      localPosition: event.localPosition,
+      kind: event.kind,
+    ));
+
+    _resetTapTracking();
+  }
+
+  bool _shouldTrackPointer(PointerDownEvent event) {
+    switch (event.kind) {
+      case PointerDeviceKind.mouse:
+        return (event.buttons & kPrimaryButton) != 0;
+      case PointerDeviceKind.touch:
+      case PointerDeviceKind.stylus:
+      case PointerDeviceKind.invertedStylus:
+      case PointerDeviceKind.unknown:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  void _handleTapIfAllowed(TapUpDetails details) {
+    if (_hasActiveSelection) {
+      debugPrint('[ReaderScreen] Tap clears active selection');
+      _clearSelectionState();
+      return;
+    }
+    _handleTapUp(details);
+  }
   void _handleSelectionChanged(bool hasSelection, VoidCallback clearSelection) {
     if (hasSelection) {
-      _resetTapTracking();
+      // When selection becomes active, store the callback and timestamp
+      // The timestamp is used to defer clearing selection on tap (to allow context menu)
       _clearSelectionCallback = clearSelection;
       _lastSelectionChangeTimestamp = DateTime.now();
+      _selectionOwnerPointer ??= _activeTapPointer;
+      debugPrint('[ReaderScreen] Selection activated');
     } else {
       _clearSelectionCallback = null;
       _lastSelectionChangeTimestamp = null;
+      _selectionOwnerPointer = null;
+      debugPrint('[ReaderScreen] Selection cleared');
     }
 
     if (_hasActiveSelection != hasSelection) {
@@ -477,6 +566,16 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
         _hasActiveSelection = hasSelection;
       });
     }
+  }
+
+  void _clearSelectionState() {
+    setState(() {
+      _hasActiveSelection = false;
+      _lastSelectionChangeTimestamp = null;
+      _selectionOwnerPointer = null;
+    });
+    _clearSelectionCallback?.call();
+    _clearSelectionCallback = null;
   }
 
   Future<void> _saveProgress(PageContent page) async {
@@ -526,26 +625,13 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
   }
 
   double get _effectiveFontSize =>
-      _defaultReaderFontSize * _fontScaleMultiplier;
+      _defaultReaderFontSize * _fontScale;
 
-  double get _fontScaleMultiplier {
-    switch (_fontScalePreset) {
-      case ReaderFontScalePreset.decrease:
-        return 0.9;
-      case ReaderFontScalePreset.increase:
-        return 1.1;
-      case ReaderFontScalePreset.normal:
-      default:
-        return 1.0;
-    }
-  }
-
-  Future<void> _loadFontScalePreset() async {
-    final storedValue = await _settingsService.getReaderFontScalePreset();
-    final preset = _fontScalePresetFromStorage(storedValue);
+  Future<void> _loadFontScale() async {
+    final storedScale = await _settingsService.getReaderFontScale();
     if (mounted) {
       setState(() {
-        _fontScalePreset = preset;
+        _fontScale = storedScale;
       });
       if (_docBlocks.isNotEmpty) {
         _scheduleRepagination(retainCurrentPage: true);
@@ -553,38 +639,30 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     }
   }
 
-  void _changeFontScale(ReaderFontScalePreset preset) {
-    if (_fontScalePreset == preset) {
-      return;
+  void _incrementFontScale() {
+    const step = 0.1;
+    final newScale = (_fontScale + step).clamp(0.5, 2.0);
+    if ((newScale - _fontScale).abs() < 0.01) {
+      return; // No change, already at limit
     }
     setState(() {
-      _fontScalePreset = preset;
+      _fontScale = newScale;
     });
-    unawaited(
-        _settingsService.saveReaderFontScalePreset(_fontScalePresetToStorage(preset)));
+    unawaited(_settingsService.saveReaderFontScale(_fontScale));
     _scheduleRepagination(retainCurrentPage: true);
   }
 
-  int _fontScalePresetToStorage(ReaderFontScalePreset preset) {
-    switch (preset) {
-      case ReaderFontScalePreset.decrease:
-        return -1;
-      case ReaderFontScalePreset.increase:
-        return 1;
-      case ReaderFontScalePreset.normal:
-      default:
-        return 0;
+  void _decrementFontScale() {
+    const step = 0.1;
+    final newScale = (_fontScale - step).clamp(0.5, 2.0);
+    if ((newScale - _fontScale).abs() < 0.01) {
+      return; // No change, already at limit
     }
-  }
-
-  ReaderFontScalePreset _fontScalePresetFromStorage(int value) {
-    if (value <= -1) {
-      return ReaderFontScalePreset.decrease;
-    }
-    if (value >= 1) {
-      return ReaderFontScalePreset.increase;
-    }
-    return ReaderFontScalePreset.normal;
+    setState(() {
+      _fontScale = newScale;
+    });
+    unawaited(_settingsService.saveReaderFontScale(_fontScale));
+    _scheduleRepagination(retainCurrentPage: true);
   }
 
   Future<bool> _goToNextPage({bool resetPager = true}) async {
@@ -744,12 +822,20 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
 
     controller.dispose();
 
-    if (result != null) {
-      _jumpToPercentage(result);
+    if (result != null && mounted) {
+      // Use SchedulerBinding to ensure dialog is fully closed and widget tree is stable
+      // before triggering repagination
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _jumpToPercentage(result);
+        }
+      });
     }
   }
 
   void _jumpToPercentage(double percentage) {
+    if (!mounted) return;
+    
     final totalChars = _totalCharacterCount;
     if (totalChars <= 0) {
       return;
@@ -771,6 +857,10 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
 
   void _handlePageChanged(int pageIndex) {
     if (pageIndex == 1) return;
+
+    // Any page change (tap or swipe) clears active selection.
+    _clearSelectionState();
+    debugPrint('[ReaderScreen] PageView changed to index=$pageIndex');
 
     if (pageIndex == 2) {
       unawaited(
@@ -858,68 +948,29 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     ];
 
     return Scaffold(
-      body: Stack(
-        children: [
-          PageView.builder(
-            controller: _pageController,
-            itemCount: pages.length,
-            onPageChanged: _handlePageChanged,
-            physics:
-                _hasActiveSelection ? const NeverScrollableScrollPhysics() : null,
-            itemBuilder: (context, index) => pages[index],
-          ),
-          // GestureDetector that covers the entire screen to catch taps
-          // Actions are dispatched on tap up so the entire single-tap gesture
-          // completes before navigation/menu toggles run.
-          Positioned.fill(
-            child: Listener(
-              behavior: HitTestBehavior.translucent,
-              onPointerDown: (event) {
-                if (_activeTapPointer != null) return;
-                if (!_shouldTrackPointer(event)) return;
-                _activeTapPointer = event.pointer;
-                _activeTapDownPosition = event.position;
-                _activeTapExceededSlop = false;
-              },
-              onPointerMove: (event) {
-                if (event.pointer != _activeTapPointer) return;
-                final downPosition = _activeTapDownPosition;
-                if (downPosition == null) return;
-                if (!_activeTapExceededSlop &&
-                    (event.position - downPosition).distance > kTouchSlop) {
-                  _activeTapExceededSlop = true;
-                }
-              },
-              onPointerCancel: (event) {
-                if (event.pointer == _activeTapPointer) {
-                  _resetTapTracking();
-                }
-              },
-              onPointerUp: (event) {
-                if (event.pointer == _activeTapPointer) {
-                  if (!_activeTapExceededSlop) {
-                    _handleTapUp(
-                      TapUpDetails(
-                        globalPosition: event.position,
-                        localPosition: event.localPosition,
-                        kind: event.kind,
-                      ),
-                    );
-                  }
-                  _resetTapTracking();
-                }
-              },
-              child: const SizedBox.expand(),
+      body: Listener(
+        behavior: HitTestBehavior.deferToChild,
+        onPointerDown: _handlePointerDown,
+        onPointerMove: _handlePointerMove,
+        onPointerUp: _handlePointerUp,
+        onPointerCancel: _handlePointerCancel,
+        child: Stack(
+          children: [
+            PageView.builder(
+              controller: _pageController,
+              itemCount: pages.length,
+              onPageChanged: _handlePageChanged,
+              itemBuilder: (context, index) => pages[index],
             ),
-          ),
-          if (_showProgressBar)
-            Positioned(
-              bottom: 24,
-              left: 24,
-              right: 24,
-              child: _buildProgressIndicator(theme),
-            ),
-        ],
+            if (_showProgressBar)
+              Positioned(
+                bottom: 24,
+                left: 24,
+                right: 24,
+                child: _buildProgressIndicator(theme),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -998,17 +1049,17 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
         ),
         child: Align(
           alignment: Alignment.center,
-          child: _PageContentView(
-            content: page,
-            maxWidth: metrics.maxWidth,
-            maxHeight: metrics.maxHeight,
-            textHeightBehavior: metrics.textHeightBehavior,
-            textScaler: metrics.textScaler,
-            actionLabel: actionLabel,
-            onSelectionAction: _handleSelectionAction,
-            onSelectionChanged: _handleSelectionChanged,
-            isProcessingAction: _isProcessingSelection,
-          ),
+            child: PageContentView(
+              content: page,
+              maxWidth: metrics.maxWidth,
+              maxHeight: metrics.maxHeight,
+              textHeightBehavior: metrics.textHeightBehavior,
+              textScaler: metrics.textScaler,
+              actionLabel: actionLabel,
+              onSelectionAction: _handleSelectionAction,
+              onSelectionChanged: _handleSelectionChanged,
+              isProcessingAction: _isProcessingSelection,
+            ),
         ),
       ),
     );
@@ -1017,8 +1068,9 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
   void _openReadingMenu() {
     unawaited(showReaderMenu(
       context: context,
-      fontScalePreset: _fontScalePreset,
-      onFontScaleChanged: _changeFontScale,
+      fontScale: _fontScale,
+      onFontScaleIncrement: _incrementFontScale,
+      onFontScaleDecrement: _decrementFontScale,
       hasChapters: _chapterEntries.isNotEmpty,
       onGoToChapter: _showChapterSelector,
       onGoToPercentage: _showGoToPercentageDialog,
@@ -1392,6 +1444,22 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     final chapters = <_ChapterEntry>[];
     final images = epub.Content?.Images;
 
+    // Extract CSS stylesheets
+    final cssResolver = CssResolver();
+    final cssFiles = epub.Content?.Css;
+    if (cssFiles != null) {
+      for (final entry in cssFiles.entries) {
+        final cssContent = entry.value.Content;
+        if (cssContent != null) {
+          final cssString = cssContent.toString();
+          if (cssString.isNotEmpty) {
+            cssResolver.addStylesheet(entry.key, cssString);
+          }
+        }
+      }
+    }
+    cssResolver.parseAll();
+
     final epubChapters = epub.Chapters ?? const <EpubChapter>[];
     for (var i = 0; i < epubChapters.length; i++) {
       final chapter = epubChapters[i];
@@ -1406,6 +1474,7 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
         html,
         chapterIndex: i,
         images: images,
+        cssResolver: cssResolver,
       );
       if (result.isNotEmpty) {
         chapters.add(_ChapterEntry(index: i, title: title));
@@ -1414,15 +1483,21 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     }
 
     if (blocks.isEmpty) {
+      final fallbackText = 'Aucun contenu lisible dans ce livre.';
       blocks.add(
         TextDocumentBlock(
           chapterIndex: 0,
           spacingBefore: 0,
           spacingAfter: _paragraphSpacing,
-          text: 'Aucun contenu lisible dans ce livre.',
-          fontScale: 1.0,
-          fontWeight: FontWeight.normal,
-          fontStyle: FontStyle.italic,
+          text: fallbackText,
+          nodes: [
+            InlineTextNode(
+              start: 0,
+              end: fallbackText.length,
+              style: const InlineTextStyle(fontStyle: FontStyle.italic),
+            ),
+          ],
+          baseStyle: const InlineTextStyle(fontScale: 1.0),
           textAlign: TextAlign.center,
         ),
       );
@@ -1454,6 +1529,7 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     String html, {
     required int chapterIndex,
     Map<String, EpubByteContentFile>? images,
+    required CssResolver cssResolver,
   }) {
     final document = html_parser.parse(html);
     final body = document.body;
@@ -1461,170 +1537,128 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
       return const [];
     }
 
+    // Extract inline styles from <style> tags
+    final styleTags = document.querySelectorAll('style');
+    for (final styleTag in styleTags) {
+      final cssContent = styleTag.text;
+      if (cssContent.isNotEmpty) {
+        cssResolver.addStylesheet('inline-${styleTag.hashCode}', cssContent);
+      }
+    }
+    cssResolver.parseAll();
+
     final blocks = <DocumentBlock>[];
     bool isFirstBlock = true;
-    final buffer = StringBuffer();
-    bool pendingParagraphBreak = false;
-    
-    // Track current formatting state
-    FontWeight currentFontWeight = FontWeight.normal;
-    FontStyle currentFontStyle = FontStyle.normal;
-    // Stack to handle nested formatting (e.g., <strong><em>text</em></strong>)
-    final formattingStack = <_FormattingState>[];
+    _InlineCollector? activeCollector;
+    final imageResolver = (String src) => _resolveImageBytes(src, images);
 
-    void flushTextBuffer({FontWeight? fontWeight, FontStyle? fontStyle}) {
-      final normalized = normalizeWhitespace(buffer.toString());
-      if (normalized.isEmpty) {
-        buffer.clear();
-        pendingParagraphBreak = false;
+    bool isResultEmpty(_InlineContentResult result) {
+      final cleaned = result.text.replaceAll('\uFFFC', '').trim();
+      final hasPlaceholders =
+          result.nodes.any((node) => node is InlinePlaceholderNode);
+      return cleaned.isEmpty && !hasPlaceholders;
+    }
+
+    void addBlock(
+      _InlineContentResult? result, {
+      TextAlign textAlign = TextAlign.left,
+      double? spacingBefore,
+      double? spacingAfter,
+      bool appendToCollector = false,
+    }) {
+      if (result == null || isResultEmpty(result)) {
         return;
       }
+      
+      // If we have an active collector and we're supposed to append, do that
+      if (appendToCollector && activeCollector != null) {
+        // Add paragraph break (double newline) before new content
+        activeCollector!.appendLiteral('\n\n');
+        // Append the result content
+        activeCollector!.appendResult(result);
+        return;
+      }
+      
+      // Otherwise, create a new block
+      final before = spacingBefore ?? (isFirstBlock ? 0 : 0.0); // No spacing between blocks
+      final after = spacingAfter ?? 0.0; // No spacing after
       blocks.add(
         TextDocumentBlock(
           chapterIndex: chapterIndex,
-          spacingBefore: isFirstBlock ? 0 : _paragraphSpacing / 2,
-          spacingAfter: _paragraphSpacing,
-          text: normalized,
-          fontScale: 1.0,
-          fontWeight: fontWeight ?? currentFontWeight,
-          fontStyle: fontStyle ?? currentFontStyle,
-          textAlign: TextAlign.left,
-        ),
-      );
-      buffer.clear();
-      pendingParagraphBreak = false;
-      isFirstBlock = false;
-    }
-
-    void flushForImage(String? src) {
-      flushTextBuffer();
-      if (src == null) return;
-      final bytes = _resolveImageBytes(src, images);
-      if (bytes == null) return;
-      double? width;
-      double? height;
-      try {
-        final decoded = img.decodeImage(bytes);
-        if (decoded != null) {
-          width = decoded.width.toDouble();
-          height = decoded.height.toDouble();
-        }
-      } catch (_) {
-        width = null;
-        height = null;
-      }
-      blocks.add(
-        ImageDocumentBlock(
-          chapterIndex: chapterIndex,
-          spacingBefore: isFirstBlock ? 0 : _paragraphSpacing,
-          spacingAfter: _paragraphSpacing,
-          bytes: bytes,
-          intrinsicWidth: width,
-          intrinsicHeight: height,
+          spacingBefore: before,
+          spacingAfter: after,
+          text: result.text,
+          nodes: result.nodes,
+          baseStyle: InlineTextStyle.empty,
+          textAlign: textAlign,
         ),
       );
       isFirstBlock = false;
     }
 
-    void ensureParagraphBoundary() {
-      if (buffer.isNotEmpty) {
-        if (pendingParagraphBreak && !buffer.toString().endsWith('\n\n')) {
-          if (buffer.toString().endsWith('\n')) {
-            buffer.write('\n');
-          } else {
-            buffer.write('\n\n');
-          }
-        }
-        pendingParagraphBreak = false;
+    void flushActiveCollector() {
+      if (activeCollector == null) return;
+      final result = activeCollector!.build();
+      activeCollector = null; // Clear before calling addBlock
+      if (result != null && !isResultEmpty(result)) {
+        blocks.add(
+          TextDocumentBlock(
+            chapterIndex: chapterIndex,
+            spacingBefore: isFirstBlock ? 0 : 0.0,
+            spacingAfter: 0.0,
+            text: result.text,
+            nodes: result.nodes,
+            baseStyle: InlineTextStyle.empty,
+            textAlign: TextAlign.left,
+          ),
+        );
+        isFirstBlock = false;
       }
     }
 
-    void scheduleParagraphBreak() {
-      pendingParagraphBreak = true;
+    _InlineContentResult? buildBlockFromElement(
+      dom.Element element,
+    ) {
+      final elementStyle = cssResolver.resolveStyles(element);
+      final collector = _InlineCollector(
+        resolveImage: imageResolver,
+        baseStyle: elementStyle,
+        cssResolver: cssResolver,
+      );
+      for (final child in element.nodes) {
+        collector.collect(child);
+      }
+      return collector.build();
     }
 
-    // Track if we need to add a space before the next text node
-    // This helps preserve spacing when inline elements are adjacent
-    bool _needsSpaceBeforeNextText = false;
-
-    void writeText(String text) {
-      if (text.isEmpty) return;
-      
-      final cleaned = _cleanText(text);
-      if (cleaned.isEmpty) {
-        // Even if cleaned is empty, if it was whitespace, we should clear the flag
-        // because whitespace already provides separation
-        if (text.trim().isEmpty) {
-          _needsSpaceBeforeNextText = false;
-        }
+    void processNode(dom.Node node) {
+      if (node is dom.Element && _isLayoutArtifact(node)) {
         return;
       }
-      
-      // Check if we need to add a space between adjacent text nodes
-      // This happens when text nodes from adjacent inline elements would
-      // otherwise be concatenated without a space
-      if (_needsSpaceBeforeNextText && buffer.isNotEmpty) {
-        // Only add space if buffer doesn't already end with whitespace
-        // and the new text doesn't start with whitespace
-        final bufferStr = buffer.toString();
-        if (bufferStr.isNotEmpty) {
-          final lastChar = bufferStr[bufferStr.length - 1];
-          final firstChar = cleaned[0];
-          // Add space if both are non-whitespace characters
-          if (lastChar != ' ' && 
-              lastChar != '\n' && 
-              lastChar != '\t' &&
-              firstChar != ' ' && 
-              firstChar != '\n' &&
-              firstChar != '\t') {
-            buffer.write(' ');
-          }
-        }
-        _needsSpaceBeforeNextText = false;
-      }
-      
-      buffer.write(cleaned);
-      
-      // If the text ends with whitespace, clear the flag since we already have separation
-      if (cleaned.trim().isEmpty || cleaned.endsWith(' ') || cleaned.endsWith('\n')) {
-        _needsSpaceBeforeNextText = false;
-      }
-    }
 
-    void walk(dom.Node node) {
       if (node is dom.Element) {
         final name = node.localName?.toLowerCase();
-        if (name == null || _isLayoutArtifact(node)) {
-          return;
-        }
-
         switch (name) {
           case 'style':
           case 'script':
             return;
-          case 'br':
-            buffer.write('\n');
-            _needsSpaceBeforeNextText = false;
-            return;
-          case 'img':
-            flushForImage(node.attributes['src']);
-            scheduleParagraphBreak();
-            _needsSpaceBeforeNextText = false;
-            return;
-          case 'ul':
-          case 'ol':
-            ensureParagraphBoundary();
-            final ordered = name == 'ol';
-            int counter = 1;
-            for (final child in node.children.where((n) => n.localName == 'li')) {
-              final text = normalizeWhitespace(child.text);
-              if (text.isEmpty) continue;
-              final bullet = ordered ? '$counter. ' : '• ';
-              buffer.write('$bullet$text\n');
-              counter++;
+          case 'p':
+          case 'blockquote':
+          case 'pre':
+            // Append paragraph to active collector (don't create separate block)
+            activeCollector ??= _InlineCollector(
+              resolveImage: imageResolver,
+              baseStyle: InlineTextStyle.empty,
+              cssResolver: cssResolver,
+            );
+            // Add paragraph break if collector already has content
+            if (activeCollector!.hasContent) {
+              activeCollector!.appendLiteral('\n\n');
             }
-            scheduleParagraphBreak();
-            _needsSpaceBeforeNextText = false;
+            // Process paragraph content directly into collector
+            for (final child in node.nodes) {
+              activeCollector!.collect(child);
+            }
             return;
           case 'h1':
           case 'h2':
@@ -1632,151 +1666,131 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
           case 'h4':
           case 'h5':
           case 'h6':
-          case 'p':
-          case 'div':
-          case 'section':
-          case 'article':
-          case 'blockquote':
-          case 'pre':
-            ensureParagraphBoundary();
-            for (final child in node.nodes) {
-              walk(child);
-            }
-            scheduleParagraphBreak();
-            _needsSpaceBeforeNextText = false;
+            // Headings should flush and create new blocks
+            flushActiveCollector();
+            final hAlign = cssResolver.resolveTextAlign(node) ?? TextAlign.center;
+            addBlock(
+              buildBlockFromElement(node),
+              textAlign: hAlign,
+              spacingBefore: isFirstBlock ? 0 : _headingSpacing / 2,
+              spacingAfter: _headingSpacing,
+            );
             return;
-          case 'strong':
-          case 'b':
-            // Handle bold formatting
-            // Flush any existing text with current formatting before changing
-            if (buffer.isNotEmpty) {
-              flushTextBuffer();
+          case 'ul':
+          case 'ol':
+            // Lists should append to active collector
+            activeCollector ??= _InlineCollector(
+              resolveImage: imageResolver,
+              baseStyle: InlineTextStyle.empty,
+              cssResolver: cssResolver,
+            );
+            if (activeCollector!.hasContent) {
+              activeCollector!.appendLiteral('\n\n');
             }
-            // Save current formatting state
-            formattingStack.add(_FormattingState(
-              fontWeight: currentFontWeight,
-              fontStyle: currentFontStyle,
-            ));
-            // Apply bold formatting
-            currentFontWeight = FontWeight.bold;
-            // Process children with bold formatting
-            for (final child in node.nodes) {
-              walk(child);
-            }
-            // Check if text was written and get last char before flushing
-            final textWasWritten = buffer.isNotEmpty;
-            String? lastCharBeforeFlush;
-            if (textWasWritten) {
-              final bufferStr = buffer.toString();
-              if (bufferStr.isNotEmpty) {
-                lastCharBeforeFlush = bufferStr[bufferStr.length - 1];
-              }
-            }
-            // Flush any text written with bold formatting
-            if (textWasWritten) {
-              flushTextBuffer();
-            }
-            // Restore previous formatting
-            if (formattingStack.isNotEmpty) {
-              final previous = formattingStack.removeLast();
-              currentFontWeight = previous.fontWeight;
-              currentFontStyle = previous.fontStyle;
-            } else {
-              currentFontWeight = FontWeight.normal;
-            }
-            // Track spacing if text was written and doesn't end with whitespace
-            if (textWasWritten && 
-                lastCharBeforeFlush != null &&
-                lastCharBeforeFlush != ' ' && 
-                lastCharBeforeFlush != '\n' && 
-                lastCharBeforeFlush != '\t') {
-              _needsSpaceBeforeNextText = true;
+            final ordered = name == 'ol';
+            int counter = 1;
+            for (final child in node.children.where((e) => e.localName == 'li')) {
+              final childStyle = cssResolver.resolveStyles(child);
+              final mergedStyle = activeCollector!._currentStyle.merge(childStyle);
+              activeCollector!.pushStyle(mergedStyle, () {
+                final bullet = ordered ? '$counter. ' : '• ';
+                activeCollector!.appendLiteral(bullet);
+                for (final grandChild in child.nodes) {
+                  activeCollector!.collect(grandChild);
+                }
+              });
+              activeCollector!.appendLiteral('\n');
+              counter++;
             }
             return;
-          case 'em':
-          case 'i':
-            // Handle italic formatting
-            // Flush any existing text with current formatting before changing
-            if (buffer.isNotEmpty) {
-              flushTextBuffer();
-            }
-            // Save current formatting state
-            formattingStack.add(_FormattingState(
-              fontWeight: currentFontWeight,
-              fontStyle: currentFontStyle,
-            ));
-            // Apply italic formatting
-            currentFontStyle = FontStyle.italic;
-            // Process children with italic formatting
-            for (final child in node.nodes) {
-              walk(child);
-            }
-            // Check if text was written and get last char before flushing
-            final textWasWritten = buffer.isNotEmpty;
-            String? lastCharBeforeFlush;
-            if (textWasWritten) {
-              final bufferStr = buffer.toString();
-              if (bufferStr.isNotEmpty) {
-                lastCharBeforeFlush = bufferStr[bufferStr.length - 1];
-              }
-            }
-            // Flush any text written with italic formatting
-            if (textWasWritten) {
-              flushTextBuffer();
-            }
-            // Restore previous formatting
-            if (formattingStack.isNotEmpty) {
-              final previous = formattingStack.removeLast();
-              currentFontWeight = previous.fontWeight;
-              currentFontStyle = previous.fontStyle;
-            } else {
-              currentFontStyle = FontStyle.normal;
-            }
-            // Track spacing if text was written and doesn't end with whitespace
-            if (textWasWritten && 
-                lastCharBeforeFlush != null &&
-                lastCharBeforeFlush != ' ' && 
-                lastCharBeforeFlush != '\n' && 
-                lastCharBeforeFlush != '\t') {
-              _needsSpaceBeforeNextText = true;
-            }
-            return;
-          default:
-            // For other inline elements (span, etc.), process children
-            // Track if we write text so we can add spacing before the next text node
-            final bufferLengthBefore = buffer.length;
-            for (final child in node.nodes) {
-              walk(child);
-            }
-            // If we wrote text content in this inline element, mark that
-            // the next text node might need a space before it
-            if (buffer.length > bufferLengthBefore) {
-              final bufferStr = buffer.toString();
-              if (bufferStr.isNotEmpty) {
-                final lastChar = bufferStr[bufferStr.length - 1];
-                // Only set flag if last character is non-whitespace
-                if (lastChar != ' ' && lastChar != '\n' && lastChar != '\t') {
-                  _needsSpaceBeforeNextText = true;
+          case 'img':
+            final src = node.attributes['src'];
+            if (src != null) {
+              final bytes = imageResolver(src);
+              if (bytes != null) {
+                final imageInfo = cssResolver.resolveImageStyle(node);
+                if (imageInfo?.isBlock == true) {
+                  // Block-level image - flush and create ImageDocumentBlock
+                  flushActiveCollector();
+                  blocks.add(
+                    ImageDocumentBlock(
+                      chapterIndex: chapterIndex,
+                      spacingBefore: isFirstBlock ? 0 : 0.0, // No spacing
+                      spacingAfter: 0.0, // No spacing
+                      bytes: bytes,
+                      intrinsicWidth: imageInfo?.width,
+                      intrinsicHeight: imageInfo?.height,
+                    ),
+                  );
+                  isFirstBlock = false;
+                } else {
+                  // Inline image - add to collector (don't flush)
+                  activeCollector ??= _InlineCollector(
+                    resolveImage: imageResolver,
+                    baseStyle: InlineTextStyle.empty,
+                    cssResolver: cssResolver,
+                  );
+                  activeCollector!.collect(node);
                 }
               }
             }
             return;
+          case 'div':
+          case 'section':
+          case 'article':
+          case 'body':
+            for (final child in node.nodes) {
+              processNode(child);
+            }
+            return;
+          // Inline formatting elements should never flush the collector
+          // They should always be added to the active collector to keep text together
+          case 'i':
+          case 'em':
+          case 'strong':
+          case 'b':
+          case 'span':
+          case 'a':
+          case 'code':
+          case 'small':
+          case 'sub':
+          case 'sup':
+          case 'u':
+            // These are inline elements - add to collector without flushing
+            activeCollector ??= _InlineCollector(
+              resolveImage: imageResolver,
+              baseStyle: InlineTextStyle.empty,
+              cssResolver: cssResolver,
+            );
+            activeCollector!.collect(node);
+            return;
+          default:
+            // Unknown element: treat contents as inline
+            activeCollector ??= _InlineCollector(
+              resolveImage: imageResolver,
+              baseStyle: InlineTextStyle.empty,
+              cssResolver: cssResolver,
+            );
+            activeCollector!.collect(node);
+            return;
         }
-      } else if (node is dom.Text) {
-        writeText(node.text);
-      } else {
-        for (final child in node.nodes) {
-          walk(child);
-        }
+      }
+
+      if (node is dom.Text) {
+        activeCollector ??= _InlineCollector(
+          resolveImage: imageResolver,
+          baseStyle: InlineTextStyle.empty,
+          cssResolver: cssResolver,
+        );
+        activeCollector!.collect(node);
       }
     }
 
     for (final node in body.nodes) {
-      walk(node);
+      processNode(node);
     }
 
-    ensureParagraphBoundary();
-    flushTextBuffer();
+    flushActiveCollector();
 
     return blocks;
   }
@@ -1804,10 +1818,6 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     return false;
   }
 
-  String _cleanText(String text) {
-    return normalizeWhitespace(text);
-  }
-
   Uint8List? _resolveImageBytes(String src, Map<String, EpubByteContentFile>? images) {
     if (images == null || images.isEmpty) return null;
     var normalized = src.replaceAll('\\', '/');
@@ -1828,14 +1838,227 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
 
 }
 
-class _FormattingState {
-  const _FormattingState({
-    required this.fontWeight,
-    required this.fontStyle,
+class _InlineContentResult {
+  const _InlineContentResult({
+    required this.text,
+    required this.nodes,
   });
 
-  final FontWeight fontWeight;
-  final FontStyle fontStyle;
+  final String text;
+  final List<InlineNode> nodes;
+
+  bool get isEmpty => text.isEmpty && nodes.isEmpty;
+}
+
+typedef _ImageResolver = Uint8List? Function(String src);
+
+class _InlineCollector {
+  _InlineCollector({
+    required _ImageResolver resolveImage,
+    required InlineTextStyle baseStyle,
+    required CssResolver cssResolver,
+  })  : _resolveImage = resolveImage,
+        _styleStack = [baseStyle],
+        _cssResolver = cssResolver;
+
+  final _InlineContentBuilder _builder = _InlineContentBuilder();
+  final List<InlineTextStyle> _styleStack;
+  final _ImageResolver _resolveImage;
+  final CssResolver _cssResolver;
+  bool _needsSpaceBeforeText = false;
+
+  InlineTextStyle get _currentStyle => _styleStack.last;
+
+  void collect(dom.Node node) {
+    if (node is dom.Text) {
+      _appendText(node.text);
+      return;
+    }
+    if (node is! dom.Element) {
+      for (final child in node.nodes) {
+        collect(child);
+      }
+      return;
+    }
+
+    final name = node.localName?.toLowerCase();
+    switch (name) {
+      case 'br':
+        _builder.appendText('\n', _currentStyle);
+        _needsSpaceBeforeText = false;
+        break;
+      case 'strong':
+      case 'b':
+        final elementStyle = _cssResolver.resolveStyles(node);
+        final mergedStyle = _currentStyle.merge(elementStyle).merge(
+          const InlineTextStyle(fontWeight: FontWeight.bold),
+        );
+        pushStyle(mergedStyle, () {
+          for (final child in node.nodes) {
+            collect(child);
+          }
+        });
+        break;
+      case 'em':
+      case 'i':
+        final elementStyle = _cssResolver.resolveStyles(node);
+        final mergedStyle = _currentStyle.merge(elementStyle).merge(
+          const InlineTextStyle(fontStyle: FontStyle.italic),
+        );
+        pushStyle(mergedStyle, () {
+          for (final child in node.nodes) {
+            collect(child);
+          }
+        });
+        break;
+      case 'img':
+        final src = node.attributes['src'];
+        if (src != null) {
+          final bytes = _resolveImage(src);
+          if (bytes != null) {
+            final imageInfo = _cssResolver.resolveImageStyle(node);
+            // Images inside paragraphs/other inline contexts are always inline
+            // (block-level CSS only applies to top-level images)
+            final image = InlineImageContent(
+              bytes: bytes,
+              intrinsicWidth: imageInfo?.width,
+              intrinsicHeight: imageInfo?.height,
+            );
+            _builder.appendPlaceholder(image);
+            _needsSpaceBeforeText = false;
+          }
+        }
+        break;
+      default:
+        // Apply CSS styles for other elements
+        final elementStyle = _cssResolver.resolveStyles(node);
+        if (!elementStyle.isPlain) {
+          pushStyle(_currentStyle.merge(elementStyle), () {
+            for (final child in node.nodes) {
+              collect(child);
+            }
+          });
+        } else {
+          for (final child in node.nodes) {
+            collect(child);
+          }
+        }
+    }
+  }
+
+  _InlineContentResult? build() => _builder.build();
+
+  bool get hasContent => _builder.hasContent;
+
+  void appendLiteral(String value) {
+    if (value.isEmpty) return;
+    _builder.appendText(value, _currentStyle);
+    _needsSpaceBeforeText = false;
+  }
+  
+  void appendResult(_InlineContentResult result) {
+    // Append all nodes from another result to this collector
+    for (final node in result.nodes) {
+      if (node is InlineTextNode) {
+        final text = result.text.substring(node.start, node.end);
+        _builder.appendText(text, node.style);
+      } else if (node is InlinePlaceholderNode) {
+        _builder.appendPlaceholder(node.image);
+      }
+    }
+  }
+
+  void _appendText(String value) {
+    final cleaned = normalizeWhitespace(value);
+    if (cleaned.isEmpty) {
+      return;
+    }
+    var textToWrite = cleaned;
+    if (_needsSpaceBeforeText &&
+        _builder.hasContent &&
+        !_startsWithWhitespace(cleaned)) {
+      textToWrite = ' $textToWrite';
+    }
+    _builder.appendText(textToWrite, _currentStyle);
+    _needsSpaceBeforeText = !_endsWithWhitespace(textToWrite);
+  }
+
+  void pushStyle(InlineTextStyle delta, VoidCallback body) {
+    final merged = _currentStyle.merge(delta);
+    _styleStack.add(merged);
+    try {
+      body();
+    } finally {
+      _styleStack.removeLast();
+    }
+  }
+
+  bool _startsWithWhitespace(String value) {
+    if (value.isEmpty) return false;
+    final code = value.codeUnitAt(0);
+    return code <= 32;
+  }
+
+  bool _endsWithWhitespace(String value) {
+    if (value.isEmpty) return false;
+    final code = value.codeUnitAt(value.length - 1);
+    return code <= 32;
+  }
+}
+
+class _InlineContentBuilder {
+  final StringBuffer _buffer = StringBuffer();
+  final List<InlineNode> _nodes = [];
+
+  bool get hasContent => _buffer.isNotEmpty;
+
+  void appendText(String text, InlineTextStyle style) {
+    if (text.isEmpty) return;
+    final start = _buffer.length;
+    _buffer.write(text);
+    final end = _buffer.length;
+    if (_nodes.isNotEmpty &&
+        _nodes.last is InlineTextNode &&
+        (_nodes.last as InlineTextNode).style == style &&
+        _nodes.last.end == start) {
+      final last = _nodes.removeLast() as InlineTextNode;
+      _nodes.add(
+        InlineTextNode(
+          start: last.start,
+          end: end,
+          style: last.style,
+        ),
+      );
+    } else {
+      _nodes.add(
+        InlineTextNode(
+          start: start,
+          end: end,
+          style: style,
+        ),
+      );
+    }
+  }
+
+  void appendPlaceholder(InlineImageContent image) {
+    final position = _buffer.length;
+    _buffer.write('\uFFFC');
+    _nodes.add(InlinePlaceholderNode(position: position, image: image));
+  }
+
+  _InlineContentResult? build() {
+    if (_buffer.isEmpty) {
+      _nodes.clear();
+      return null;
+    }
+    final result = _InlineContentResult(
+      text: _buffer.toString(),
+      nodes: List<InlineNode>.from(_nodes),
+    );
+    _buffer.clear();
+    _nodes.clear();
+    return result;
+  }
 }
 
 class _DocumentExtractionResult {
@@ -1875,125 +2098,23 @@ class _PageMetrics {
   final double viewportBottomInset;
 }
 
-class _PageContentView extends StatefulWidget {
-  const _PageContentView({
-    required this.content,
-    required this.maxWidth,
-    required this.maxHeight,
-    required this.textHeightBehavior,
-    required this.textScaler,
-    required this.actionLabel,
-    required this.onSelectionAction,
-    required this.onSelectionChanged,
-    required this.isProcessingAction,
-  });
-
-  final PageContent content;
-  final double maxWidth;
-  final double maxHeight;
-  final TextHeightBehavior textHeightBehavior;
-  final TextScaler textScaler;
-  final String actionLabel;
-  final ValueChanged<String>? onSelectionAction;
-  final void Function(bool hasSelection, VoidCallback clearSelection)?
-      onSelectionChanged;
-  final bool isProcessingAction;
-
-  @override
-  State<_PageContentView> createState() => _PageContentViewState();
-}
-
-class _PageContentViewState extends State<_PageContentView> {
-  String _selectedText = '';
-  int _selectionGeneration = 0;
-
-  void _clearSelection() {
-    setState(() {
-      _selectedText = '';
-      _selectionGeneration++;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final children = <Widget>[];
-
-    for (final block in widget.content.blocks) {
-      if (block.spacingBefore > 0) {
-        children.add(SizedBox(height: block.spacingBefore));
-      }
-
-      if (block is TextPageBlock) {
-        children.add(
-          Text(
-            block.text,
-            style: block.style,
-            textAlign: block.textAlign,
-            softWrap: true,
-            textHeightBehavior: widget.textHeightBehavior,
-            textScaler: widget.textScaler,
-          ),
-        );
-      } else if (block is ImagePageBlock) {
-        children.add(
-          SizedBox(
-            height: block.height,
-            width: widget.maxWidth,
-            child: material.Image.memory(
-              block.bytes,
-              fit: BoxFit.contain,
-            ),
-          ),
-        );
-      }
-
-      if (block.spacingAfter > 0) {
-        children.add(SizedBox(height: block.spacingAfter));
-      }
-    }
-
-    return SizedBox(
-      width: widget.maxWidth,
-      height: widget.maxHeight,
-      child: SelectionArea(
-        key: ValueKey(_selectionGeneration),
-        contextMenuBuilder: (context, delegate) {
-          final items = delegate.contextMenuButtonItems.toList();
-          final trimmedText = _selectedText.trim();
-          if (trimmedText.isNotEmpty && widget.onSelectionAction != null && !widget.isProcessingAction) {
-            // Insérer l'action personnalisée au début du menu, au même niveau que "Copier" et "Tout sélectionner"
-            items.insert(0,
-              ContextMenuButtonItem(
-                onPressed: () {
-                  delegate.hideToolbar();
-                  widget.onSelectionAction?.call(trimmedText);
-                  _clearSelection();
-                },
-                label: widget.actionLabel,
-              ),
-            );
-          }
-          return AdaptiveTextSelectionToolbar.buttonItems(
-            anchors: delegate.contextMenuAnchors,
-            buttonItems: items,
-          );
-        },
-        onSelectionChanged: (selection) {
-          // Get plain text from selection - selection is a SelectedContent?
-          final selected = selection?.plainText ?? '';
-          setState(() {
-            _selectedText = selected;
-          });
-          final hasSelection = selected.trim().isNotEmpty;
-          widget.onSelectionChanged?.call(hasSelection, _clearSelection);
-        },
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisAlignment: MainAxisAlignment.center,
-          mainAxisSize: MainAxisSize.max,
-          children: children,
-        ),
-      ),
-    );
-  }
+@visibleForTesting
+bool shouldKeepSelectionOnPointerUp({
+  required bool hasSelection,
+  required bool isSelectionOwnerPointer,
+  required bool slopExceeded,
+  required Duration? pressDuration,
+  required DateTime? lastSelectionChangeTimestamp,
+  required DateTime now,
+  Duration deferWindow = const Duration(milliseconds: 250),
+  Duration longPressThreshold = const Duration(milliseconds: 450),
+}) {
+  if (!hasSelection) return false;
+  if (isSelectionOwnerPointer) return true;
+  if (slopExceeded) return true;
+  if (pressDuration != null && pressDuration >= longPressThreshold) return true;
+  final withinDeferWindow = lastSelectionChangeTimestamp != null &&
+      now.difference(lastSelectionChangeTimestamp) < deferWindow;
+  if (withinDeferWindow) return true;
+  return false;
 }
