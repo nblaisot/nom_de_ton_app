@@ -57,16 +57,37 @@ class SettingsService {
     await prefs.setDouble(_fontSizeKey, clampedSize);
   }
 
-  /// Load the reader font scale preset (-1 = smaller, 0 = normal, 1 = larger)
-  Future<int> getReaderFontScalePreset() async {
+  /// Load the reader font scale multiplier (1.0 = normal, <1.0 = smaller, >1.0 = larger)
+  /// Default is 1.0 (normal size)
+  Future<double> getReaderFontScale() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_readerFontScaleKey) ?? 0;
+    // Handle legacy values safely (could be int or double depending on app version)
+    final raw = prefs.get(_readerFontScaleKey);
+
+    // Migrate old int-based preset: -1 -> 0.9, 0 -> 1.0, 1 -> 1.1
+    if (raw is int) {
+      final scale = raw == -1 ? 0.9 : (raw == 1 ? 1.1 : 1.0);
+      await prefs.setDouble(_readerFontScaleKey, scale);
+      return scale;
+    }
+
+    if (raw is double) {
+      // Clamp to current allowed range to avoid storing bad data
+      final clamped = raw.clamp(0.5, 2.0);
+      if (clamped != raw) {
+        await prefs.setDouble(_readerFontScaleKey, clamped);
+      }
+      return clamped;
+    }
+
+    return 1.0;
   }
 
-  /// Persist the reader font scale preset (-1 = smaller, 0 = normal, 1 = larger)
-  Future<void> saveReaderFontScalePreset(int preset) async {
+  /// Persist the reader font scale multiplier (clamped between 0.5 and 2.0)
+  Future<void> saveReaderFontScale(double scale) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_readerFontScaleKey, preset.clamp(-1, 1));
+    final clampedScale = scale.clamp(0.5, 2.0);
+    await prefs.setDouble(_readerFontScaleKey, clampedScale);
   }
 
   /// Get min font size
@@ -118,4 +139,3 @@ class SettingsService {
   /// Get default vertical padding
   double get defaultVerticalPadding => _defaultVerticalPadding;
 }
-

@@ -43,6 +43,7 @@ dependencies:
   
   # Image processing for cover extraction
   image: ^3.3.0
+  csslib: ^1.0.0
   
   # File picker for importing EPUB files
   file_picker: ^8.1.2

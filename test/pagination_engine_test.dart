@@ -5,22 +5,36 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:memoreader/screens/reader/document_model.dart';
 import 'package:memoreader/screens/reader/line_metrics_pagination_engine.dart';
 
+TextDocumentBlock _textBlock(
+  String text, {
+  int chapterIndex = 0,
+  TextAlign textAlign = TextAlign.left,
+  InlineTextStyle? style,
+}) {
+  return TextDocumentBlock(
+    chapterIndex: chapterIndex,
+    spacingBefore: 0,
+    spacingAfter: 0,
+    text: text,
+    nodes: [
+      InlineTextNode(
+        start: 0,
+        end: text.length,
+        style: style ?? InlineTextStyle.empty,
+      ),
+    ],
+    baseStyle: InlineTextStyle.empty,
+    textAlign: textAlign,
+  );
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('LineMetricsPaginationEngine', () {
     test('preserves text when laying out text', () async {
       final blocks = <DocumentBlock>[
-        const TextDocumentBlock(
-          chapterIndex: 0,
-          spacingBefore: 0,
-          spacingAfter: 0,
-          text: 'Bonjour le monde',
-          fontScale: 1.0,
-          fontWeight: FontWeight.normal,
-          fontStyle: FontStyle.normal,
-          textAlign: TextAlign.left,
-        ),
+        _textBlock('Bonjour le monde'),
       ];
 
       final engine = await LineMetricsPaginationEngine.create(
@@ -77,26 +91,8 @@ void main() {
 
     test('can find page by chapter index', () async {
       final blocks = <DocumentBlock>[
-        const TextDocumentBlock(
-          chapterIndex: 0,
-          spacingBefore: 0,
-          spacingAfter: 0,
-          text: 'Chapter 1 content',
-          fontScale: 1.0,
-          fontWeight: FontWeight.normal,
-          fontStyle: FontStyle.normal,
-          textAlign: TextAlign.left,
-        ),
-        const TextDocumentBlock(
-          chapterIndex: 1,
-          spacingBefore: 0,
-          spacingAfter: 0,
-          text: 'Chapter 2 content',
-          fontScale: 1.0,
-          fontWeight: FontWeight.normal,
-          fontStyle: FontStyle.normal,
-          textAlign: TextAlign.left,
-        ),
+        _textBlock('Chapter 1 content', chapterIndex: 0),
+        _textBlock('Chapter 2 content', chapterIndex: 1),
       ];
 
       final engine = await LineMetricsPaginationEngine.create(

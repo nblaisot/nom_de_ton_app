@@ -3,13 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:memoreader/l10n/app_localizations.dart';
 
-enum ReaderFontScalePreset { decrease, normal, increase }
-
 /// Displays the reader menu as a modal sheet that slides from the top.
 Future<void> showReaderMenu({
   required BuildContext context,
-  required ReaderFontScalePreset fontScalePreset,
-  required ValueChanged<ReaderFontScalePreset> onFontScaleChanged,
+  required double fontScale,
+  required VoidCallback onFontScaleIncrement,
+  required VoidCallback onFontScaleDecrement,
   required bool hasChapters,
   required VoidCallback onGoToChapter,
   required VoidCallback onGoToPercentage,
@@ -35,8 +34,9 @@ Future<void> showReaderMenu({
       }
 
       return _ReaderMenuDialog(
-        fontScalePreset: fontScalePreset,
-        onFontScaleChanged: onFontScaleChanged,
+        fontScale: fontScale,
+        onFontScaleIncrement: onFontScaleIncrement,
+        onFontScaleDecrement: onFontScaleDecrement,
         hasChapters: hasChapters,
         onGoToChapter: () => handleAction(onGoToChapter),
         onGoToPercentage: () => handleAction(onGoToPercentage),
@@ -68,8 +68,9 @@ Future<void> showReaderMenu({
 
 class _ReaderMenuDialog extends StatefulWidget {
   const _ReaderMenuDialog({
-    required this.fontScalePreset,
-    required this.onFontScaleChanged,
+    required this.fontScale,
+    required this.onFontScaleIncrement,
+    required this.onFontScaleDecrement,
     required this.hasChapters,
     required this.onGoToChapter,
     required this.onGoToPercentage,
@@ -79,8 +80,9 @@ class _ReaderMenuDialog extends StatefulWidget {
     required this.onReturnToLibrary,
   });
 
-  final ReaderFontScalePreset fontScalePreset;
-  final ValueChanged<ReaderFontScalePreset> onFontScaleChanged;
+  final double fontScale;
+  final VoidCallback onFontScaleIncrement;
+  final VoidCallback onFontScaleDecrement;
   final bool hasChapters;
   final VoidCallback onGoToChapter;
   final VoidCallback onGoToPercentage;
@@ -94,13 +96,6 @@ class _ReaderMenuDialog extends StatefulWidget {
 }
 
 class _ReaderMenuDialogState extends State<_ReaderMenuDialog> {
-  late ReaderFontScalePreset _selectedPreset;
-
-  @override
-  void initState() {
-    super.initState();
-    _selectedPreset = widget.fontScalePreset;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -152,11 +147,9 @@ class _ReaderMenuDialogState extends State<_ReaderMenuDialog> {
                     Text('Taille du texte'),
                     const SizedBox(height: 8),
                     _FontScaleSelector(
-                      selectedPreset: _selectedPreset,
-                      onPresetChanged: (preset) {
-                        setState(() => _selectedPreset = preset);
-                        widget.onFontScaleChanged(preset);
-                      },
+                      fontScale: widget.fontScale,
+                      onIncrement: widget.onFontScaleIncrement,
+                      onDecrement: widget.onFontScaleDecrement,
                     ),
                     const SizedBox(height: 8),
                     if (widget.hasChapters)
@@ -216,35 +209,55 @@ class _ReaderMenuDialogState extends State<_ReaderMenuDialog> {
 
 class _FontScaleSelector extends StatelessWidget {
   const _FontScaleSelector({
-    required this.selectedPreset,
-    required this.onPresetChanged,
+    required this.fontScale,
+    required this.onIncrement,
+    required this.onDecrement,
   });
 
-  final ReaderFontScalePreset selectedPreset;
-  final ValueChanged<ReaderFontScalePreset> onPresetChanged;
+  final double fontScale;
+  final VoidCallback onIncrement;
+  final VoidCallback onDecrement;
 
   @override
   Widget build(BuildContext context) {
-    final presets = ReaderFontScalePreset.values;
-    final labels = <ReaderFontScalePreset, String>{
-      ReaderFontScalePreset.decrease: '-',
-      ReaderFontScalePreset.normal: 'Normal',
-      ReaderFontScalePreset.increase: '+',
-    };
-    final isSelected = presets.map((preset) => preset == selectedPreset).toList();
-    return Center(
-      child: ToggleButtons(
-        isSelected: isSelected,
-        borderRadius: BorderRadius.circular(12),
-        constraints: const BoxConstraints(minHeight: 40, minWidth: 60),
-        onPressed: (index) => onPresetChanged(presets[index]),
-        children: presets
-            .map((preset) => Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Text(labels[preset]!)),
-                )
-            .toList(),
-      ),
+    final theme = Theme.of(context);
+    final isAtMin = fontScale <= 0.5;
+    final isAtMax = fontScale >= 2.0;
+    
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        IconButton(
+          icon: const Icon(Icons.remove),
+          onPressed: isAtMin ? null : onDecrement,
+          tooltip: 'Réduire la taille',
+          style: IconButton.styleFrom(
+            backgroundColor: theme.colorScheme.surfaceVariant,
+            foregroundColor: isAtMin 
+                ? theme.colorScheme.onSurface.withValues(alpha: 0.38)
+                : theme.colorScheme.onSurface,
+          ),
+        ),
+        const SizedBox(width: 16),
+        Text(
+          '${(fontScale * 100).toStringAsFixed(0)}%',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(width: 16),
+        IconButton(
+          icon: const Icon(Icons.add),
+          onPressed: isAtMax ? null : onIncrement,
+          tooltip: 'Augmenter la taille',
+          style: IconButton.styleFrom(
+            backgroundColor: theme.colorScheme.surfaceVariant,
+            foregroundColor: isAtMax 
+                ? theme.colorScheme.onSurface.withValues(alpha: 0.38)
+                : theme.colorScheme.onSurface,
+          ),
+        ),
+      ],
     );
   }
 }

@@ -7,6 +7,7 @@ import '../services/enhanced_summary_service.dart';
 import '../services/background_summary_service.dart';
 import '../models/book.dart';
 import '../models/reading_progress.dart';
+import 'summary_debug_screen.dart';
 
 enum SummaryType {
   fromBeginning,
@@ -411,6 +412,23 @@ class _SummaryScreenState extends State<SummaryScreen> {
             tooltip: l10n.summaryReset,
             onPressed: _isLoading ? null : _resetCurrentSummary,
             icon: const Icon(Icons.delete_outline),
+          ),
+          IconButton(
+            tooltip: 'Voir les résumés intermédiaires (Debug)',
+            onPressed: _isLoading
+                ? null
+                : () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => SummaryDebugScreen(
+                          book: widget.book,
+                          enhancedSummaryService: widget.enhancedSummaryService,
+                        ),
+                      ),
+                    );
+                  },
+            icon: const Icon(Icons.bug_report),
           ),
           IconButton(
             tooltip: MaterialLocalizations.of(context).closeButtonTooltip,

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:memoreader/models/book.dart';
 import 'package:memoreader/screens/reader/tap_zones.dart';
 
 void main() {

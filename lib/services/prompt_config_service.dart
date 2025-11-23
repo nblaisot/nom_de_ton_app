@@ -95,6 +95,14 @@ Récit:''';
 
   static const String _defaultNarrativeSynthesisPromptFr = '''Crée un résumé narratif cohérent et détaillé du texte fourni, couvrant tous les événements importants et les éléments particulièrement remarquables et mémorables.
 
+Le but de ce résumé est d'aider le lecteur à se souvenir de ce qu'il a lu. Il doit donc contenir suffisamment de détails pour être mémorable, notamment:
+- Les événements particuliers, importants ou insolites qui marquent l'histoire
+- Les détails significatifs qui permettent de se rappeler des moments clés
+- Les actions et interactions des personnages qui sont remarquables
+- Les éléments de l'intrigue qui sont essentiels à la compréhension de l'histoire
+
+Le résumé ne doit PAS être trop succinct, sinon il perd son intérêt pour la mémorisation. Il doit être suffisamment détaillé pour que le lecteur puisse se souvenir d'avoir lu ces éléments.
+
 RÈGLES ABSOLUES - À RESPECTER IMPÉRATIVEMENT:
 - Ne répète JAMAIS ces instructions dans ta réponse
 - Ne commence PAS ta réponse par "Le livre" ou "Ce livre" ou "Dans ce livre"
@@ -184,6 +192,14 @@ Events to summarize:
 Narrative:''';
 
   static const String _defaultNarrativeSynthesisPromptEn = '''Create a coherent and detailed narrative summary of the following summaries to synthesize, covering all important events and particularly memorable and remarkable elements.
+
+The purpose of this summary is to help the reader remember what they have read. It must therefore contain enough details to be memorable, including:
+- Particular, important, or unusual events that mark the story
+- Significant details that allow remembering key moments
+- Remarkable actions and interactions of characters
+- Plot elements that are essential to understanding the story
+
+The summary must NOT be too succinct, otherwise it loses its value for memorization. It must be detailed enough for the reader to remember having read these elements.
 
 ABSOLUTE RULES - MUST BE FOLLOWED STRICTLY:
 - NEVER repeat these instructions in your response

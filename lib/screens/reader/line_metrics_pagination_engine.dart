@@ -1,10 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:typed_data';
-import 'dart:ui';
-
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../utils/text_tokenizer.dart';
@@ -168,80 +164,7 @@ class LineMetricsPaginationEngine extends ChangeNotifier {
     return base64UrlEncode(buffer.toString().codeUnits);
   }
 
-  void _restoreFromCache(PaginationCacheEntry cache) {
-    for (final cachedPage in cache.pages) {
-      final pageBlocks = <PageBlock>[];
-      for (final blockData in cachedPage.blocks) {
-        if (blockData.type == 'text') {
-          final color = blockData.color != null
-              ? Color(blockData.color!)
-              : _baseTextStyle.color;
-          final fontWeight = blockData.fontWeight != null
-              ? FontWeight.values[blockData.fontWeight!.clamp(0, FontWeight.values.length - 1)]
-              : _baseTextStyle.fontWeight ?? FontWeight.normal;
-          final fontStyle = blockData.fontStyle == 'italic'
-              ? FontStyle.italic
-              : FontStyle.normal;
-          final textStyle = _baseTextStyle.copyWith(
-            fontSize: blockData.fontSize ?? _baseTextStyle.fontSize,
-            height: blockData.height ?? _baseTextStyle.height,
-            color: color,
-            fontWeight: fontWeight,
-            fontStyle: fontStyle,
-            fontFamily: blockData.fontFamily ?? _baseTextStyle.fontFamily,
-          );
-          pageBlocks.add(TextPageBlock(
-            text: blockData.text ?? '',
-            style: textStyle,
-            textAlign: TextAlign.values[blockData.textAlign?.clamp(0, TextAlign.values.length - 1) ?? TextAlign.left.index],
-            spacingBefore: blockData.spacingBefore,
-            spacingAfter: blockData.spacingAfter,
-          ));
-        } else {
-          pageBlocks.add(ImagePageBlock(
-            bytes: Uint8List.fromList(blockData.imageBytes ?? <int>[]),
-            height: blockData.imageHeight ?? _maxHeight,
-            spacingBefore: blockData.spacingBefore,
-            spacingAfter: blockData.spacingAfter,
-          ));
-        }
-      }
-      _pages.add(PageContent(
-        blocks: pageBlocks,
-        chapterIndex: cachedPage.chapterIndex,
-        startWordIndex: cachedPage.startWordIndex,
-        endWordIndex: cachedPage.endWordIndex,
-        startCharIndex: cachedPage.startCharIndex,
-        endCharIndex: cachedPage.endCharIndex,
-      ));
-    }
-
-    _totalCharacters = cache.totalCharacters;
-    _isComplete = cache.isComplete;
-    if (_isComplete) {
-      _finalPageCount = _pages.length;
-    }
-    _cursor = cache.cursor;
-
-    if (_cursor != null) {
-      for (int i = 0; i < _cursor!.blockIndex && i < _blocks.length; i++) {
-        if (_blocks[i] is TextDocumentBlock) {
-          final state = _obtainTextState(i);
-          state.markComplete();
-        } else if (_blocks[i] is ImageDocumentBlock) {
-          _imageConsumed[i] = true;
-        }
-      }
-
-      final int blockIndex = _cursor!.blockIndex;
-      if (blockIndex < _blocks.length &&
-          _blocks[blockIndex] is TextDocumentBlock &&
-          _cursor!.textState != null) {
-        final state = _obtainTextState(blockIndex);
-        state.applyCursor(_cursor!.textState!);
-      }
-    }
-  }
+  void _restoreFromCache(PaginationCacheEntry cache) {}
 
   int? get totalPages => _finalPageCount;
   int get computedPageCount => _pages.length;
@@ -435,7 +358,7 @@ class LineMetricsPaginationEngine extends ChangeNotifier {
     final blocks = <CachedPageBlockData>[];
     for (final block in page.blocks) {
       if (block is TextPageBlock) {
-        final style = block.style;
+        final style = block.baseStyle;
         blocks.add(CachedPageBlockData.text(
           text: block.text,
           spacingBefore: block.spacingBefore,
@@ -663,8 +586,9 @@ class LineMetricsPaginationEngine extends ChangeNotifier {
     int startWordIndex,
     bool isFirstBlock,
   ) {
-    final spacingBefore = isFirstBlock ? 0.0 : block.spacingBefore;
-    final spacingAfter = block.spacingAfter;
+    // Don't apply spacingBefore - images should flow with content
+    final spacingBefore = 0.0;
+    final spacingAfter = 0.0;
 
     final intrinsicWidth = block.intrinsicWidth ?? _maxWidth;
     final intrinsicHeight = block.intrinsicHeight ?? (_maxWidth * 0.6);
@@ -673,6 +597,12 @@ class LineMetricsPaginationEngine extends ChangeNotifier {
     if (intrinsicWidth > 0 && intrinsicHeight > 0) {
       final scale = _maxWidth / intrinsicWidth;
       fittedHeight = intrinsicHeight * scale;
+    }
+
+    // Limit image height to 60% of page height to allow text before/after
+    final maxImageHeight = _maxHeight * 0.6;
+    if (fittedHeight > maxImageHeight) {
+      fittedHeight = maxImageHeight;
     }
 
     final availableHeight = _maxHeight - spacingBefore - spacingAfter;
@@ -729,19 +659,21 @@ class _TextBlockState {
         _computePageBottomMargin = computePageBottomMargin,
         _trace = trace,
         _tracingEnabled = tracingEnabled {
-    textStyle = baseTextStyle.copyWith(
-      fontSize: (baseTextStyle.fontSize ?? 16) * block.fontScale,
-      fontWeight: block.fontWeight,
-      fontStyle: block.fontStyle,
-    );
-
+    final resolvedBaseStyle = block.baseStyle.isPlain
+        ? baseTextStyle
+        : block.baseStyle.resolve(baseTextStyle);
+    _baseStyle = resolvedBaseStyle;
+    final resolved = _buildFullSpan(resolvedBaseStyle);
     textPainter = TextPainter(
-      text: TextSpan(text: block.text, style: textStyle),
+      text: resolved.span,
       textAlign: block.textAlign,
       textDirection: TextDirection.ltr,
       textHeightBehavior: _textHeightBehavior,
       textScaler: _textScaler,
     );
+    if (resolved.placeholderDimensions.isNotEmpty) {
+      textPainter.setPlaceholderDimensions(resolved.placeholderDimensions);
+    }
     textPainter.layout(maxWidth: _maxWidth);
 
     lines = textPainter.computeLineMetrics();
@@ -770,11 +702,11 @@ class _TextBlockState {
   }
 
   final TextDocumentBlock block;
-  late final TextStyle textStyle;
   late final TextPainter textPainter;
   late final List<LineMetrics> lines;
   late final List<int> lineStartOffsets;
   late final List<TokenSpan> tokenSpans;
+  late final TextStyle _baseStyle;
   final double _maxWidth;
   final double _maxHeight;
   final double _originalMaxHeight;
@@ -819,9 +751,9 @@ class _TextBlockState {
       return null;
     }
 
-    final spacingBefore = currentTextOffset == 0
-        ? (isFirstBlock ? 0.0 : block.spacingBefore)
-        : 0.0;
+    // Don't apply spacingBefore - it causes unwanted page breaks
+    // Text should flow continuously without forced spacing
+    final spacingBefore = 0.0;
 
     double currentPageHeight = spacingBefore;
     int pageStartTextIndex = currentTextOffset;
@@ -928,14 +860,23 @@ class _TextBlockState {
                 ? startWordPointer + tokensInPage - 1
                 : startWordPointer - 1;
 
+            final nextOffset = fitResult.endOffset;
+            final fragments = block.sliceFragments(
+              pageStartTextIndex,
+              nextOffset,
+              baseStyle: _baseStyle,
+            );
+
             final page = PageContent(
               blocks: [
                 TextPageBlock(
                   text: fitResult.text,
-                  style: textStyle,
+                  fragments: fragments,
                   textAlign: block.textAlign,
+                  baseStyle: _baseStyle,
                   spacingBefore: spacingBefore,
                   spacingAfter: 0.0,
+                  lineHeight: block.lineHeight,
                 ),
               ],
               chapterIndex: block.chapterIndex,
@@ -945,7 +886,6 @@ class _TextBlockState {
               endCharIndex: globalCharIndex + fitResult.text.length - 1,
             );
 
-            final nextOffset = fitResult.endOffset;
             final nextTokenPointer = fitResult.endTokenPointerExclusive;
             final pageHeight = _measureHeight(
               pageText: fitResult.text,
@@ -1009,14 +949,22 @@ class _TextBlockState {
               ? startWordPointer + tokensInPage - 1
               : startWordPointer - 1;
 
+          final fragments = block.sliceFragments(
+            pageStartTextIndex,
+            block.text.length,
+            baseStyle: _baseStyle,
+          );
+
           final page = PageContent(
             blocks: [
               TextPageBlock(
                 text: fitResult.text,
-                style: textStyle,
+                fragments: fragments,
                 textAlign: block.textAlign,
+                baseStyle: _baseStyle,
                 spacingBefore: spacingBefore,
                 spacingAfter: block.spacingAfter,
+                lineHeight: block.lineHeight,
               ),
             ],
             chapterIndex: block.chapterIndex,
@@ -1103,7 +1051,7 @@ class _TextBlockState {
     }
 
     final painter = TextPainter(
-      text: TextSpan(text: pageText, style: textStyle),
+      text: TextSpan(text: pageText, style: _baseStyle),
       textAlign: block.textAlign,
       textDirection: TextDirection.ltr,
       textHeightBehavior: _textHeightBehavior,
@@ -1179,6 +1127,79 @@ class _TextBlockState {
     }
     return low;
   }
+
+  _ResolvedInlineSpan _buildFullSpan(TextStyle baseStyle) {
+    final fragments = block.sliceFragments(
+      0,
+      block.text.length,
+      baseStyle: baseStyle,
+    );
+    final children = <InlineSpan>[];
+    final placeholderDimensions = <PlaceholderDimensions>[];
+    for (final fragment in fragments) {
+      if (fragment.type == InlineFragmentType.text) {
+        children.add(
+          TextSpan(
+            text: fragment.text,
+            style: fragment.style,
+          ),
+        );
+      } else if (fragment.type == InlineFragmentType.image &&
+          fragment.image != null) {
+        final image = fragment.image!;
+        final size = _resolvePlaceholderSize(image);
+        placeholderDimensions.add(
+          PlaceholderDimensions(
+            size: size,
+            alignment: image.alignment,
+            baseline: image.baseline,
+            baselineOffset:
+                image.baseline == TextBaseline.alphabetic ? size.height : null,
+          ),
+        );
+        children.add(
+          WidgetSpan(
+            alignment: image.alignment,
+            baseline: image.baseline,
+            child: SizedBox(width: size.width, height: size.height),
+          ),
+        );
+      }
+    }
+
+    return _ResolvedInlineSpan(
+      span: TextSpan(style: baseStyle, children: children),
+      placeholderDimensions: placeholderDimensions,
+    );
+  }
+
+  Size _resolvePlaceholderSize(InlineImageContent image) {
+    final fontSize = _baseStyle.fontSize ?? 16.0;
+    double width = image.intrinsicWidth ?? fontSize * 2;
+    double height = image.intrinsicHeight ?? fontSize * 2;
+    if (width > _maxWidth) {
+      final scale = _maxWidth / width;
+      width = _maxWidth;
+      height *= scale;
+    }
+    final maxHeight = _originalMaxHeight * 0.6;
+    if (height > maxHeight) {
+      final scale = maxHeight / height;
+      height = maxHeight;
+      width *= scale;
+    }
+    return Size(width, height);
+  }
+}
+
+class _ResolvedInlineSpan {
+  const _ResolvedInlineSpan({
+    required this.span,
+    required this.placeholderDimensions,
+  });
+
+  final InlineSpan span;
+  final List<PlaceholderDimensions> placeholderDimensions;
 }
 
 class _TextPageResult {

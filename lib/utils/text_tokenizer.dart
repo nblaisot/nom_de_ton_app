@@ -1,7 +1,7 @@
-/// Utilities for tokenizing text in a way that preserves whitespace between
-/// tokens. The pagination engine and summary services rely on the same
-/// tokenization logic so that reading progress can be translated accurately
-/// between rendered pages and summary extraction.
+// Utilities for tokenizing text in a way that preserves whitespace between
+// tokens. The pagination engine and summary services rely on the same
+// tokenization logic so that reading progress can be translated accurately
+// between rendered pages and summary extraction.
 
 final RegExp _tokenRegex = RegExp(r'\S+|\s+');
 
