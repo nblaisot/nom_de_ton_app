@@ -1,8 +1,21 @@
 import 'package:flutter/material.dart' as material;
 import 'package:flutter/material.dart';
-import 'package:meta/meta.dart';
+import 'package:flutter/services.dart';
 
 import '../../screens/reader/document_model.dart';
+import 'immediate_text_selection_controls.dart';
+
+class _BlockOffsetInfo {
+  final int startOffset;
+  final int endOffset;
+  final TextPageBlock block;
+  
+  _BlockOffsetInfo({
+    required this.startOffset,
+    required this.endOffset,
+    required this.block,
+  });
+}
 
 class PageContentView extends StatefulWidget {
   const PageContentView({
@@ -29,7 +42,6 @@ class PageContentView extends StatefulWidget {
       onSelectionChanged;
   final bool isProcessingAction;
 
-  @visibleForTesting
   static List<ContextMenuButtonItem> buildSelectionActionItems({
     required List<ContextMenuButtonItem> baseItems,
     required ValueChanged<String>? onSelectionAction,
@@ -41,6 +53,7 @@ class PageContentView extends StatefulWidget {
   }) {
     final items = List<ContextMenuButtonItem>.from(baseItems);
     final trimmedText = selectedText.trim();
+
     if (trimmedText.isNotEmpty &&
         onSelectionAction != null &&
         !isProcessingAction) {
@@ -56,6 +69,7 @@ class PageContentView extends StatefulWidget {
         ),
       );
     }
+
     return items;
   }
 
@@ -66,18 +80,131 @@ class PageContentView extends StatefulWidget {
 class _PageContentViewState extends State<PageContentView> {
   String _selectedText = '';
   int _selectionGeneration = 0;
+  final List<_BlockOffsetInfo> _blockOffsets = [];
+  final GlobalKey _selectableTextKey = GlobalKey();
 
   void _clearSelection() {
-    setState(() {
-      _selectedText = '';
-      _selectionGeneration++;
+    _selectedText = '';
+    _selectionGeneration++;
+    // Hide system toolbar
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        final editableTextState = _selectableTextKey.currentContext
+            ?.findAncestorStateOfType<EditableTextState>();
+        if (editableTextState != null) {
+          editableTextState.hideToolbar();
+        }
+      }
     });
+    // Only rebuild when explicitly clearing, not during selection changes
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+
+  @override
+  void dispose() {
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final children = <Widget>[];
+    // Build combined text span from all text blocks to enable cross-block selection
+    final combinedSpan = _buildCombinedTextSpan();
+    
+    // If we have only text blocks, use a single SelectableText for better selection
+    final hasOnlyTextBlocks = widget.content.blocks.every((b) => b is TextPageBlock);
+    
+    if (hasOnlyTextBlocks && combinedSpan != null) {
+      return SizedBox(
+        width: widget.maxWidth,
+        height: widget.maxHeight,
+        child: Stack(
+          children: [
+            Center(
+              child: SelectableText.rich(
+                key: _selectableTextKey,
+                combinedSpan,
+                textHeightBehavior: widget.textHeightBehavior,
+                textScaler: widget.textScaler,
+                selectionControls: ImmediateTextSelectionControls(
+                  onSelectionAction: widget.onSelectionAction,
+                  actionLabel: widget.actionLabel,
+                  clearSelection: _clearSelection,
+                  isProcessingAction: widget.isProcessingAction,
+                  getSelectedText: () => _selectedText,
+                ),
+                onSelectionChanged: (selection, cause) {
+                  final base = selection.baseOffset;
+                  final extent = selection.extentOffset;
+                  final valid = base >= 0 && extent >= 0;
+                  final hasSelection = valid &&
+                      (base != extent ||
+                          cause == SelectionChangedCause.longPress ||
+                          cause == SelectionChangedCause.drag);
 
+                  // Update selected text
+                  String? newSelectedText;
+                  if (hasSelection && valid && base != extent) {
+                    final lower = base < extent ? base : extent;
+                    final upper = base < extent ? extent : base;
+                    newSelectedText = _extractSelectedText(lower, upper);
+                  } else {
+                    newSelectedText = '';
+                  }
+
+                  // Update internal state
+                  _selectedText = newSelectedText ?? '';
+
+                  // Show system toolbar immediately if we have a selection
+                  final shouldShowToolbar = hasSelection && (_selectedText.isNotEmpty || cause == SelectionChangedCause.longPress);
+                  debugPrint('Selection changed - hasSelection: $hasSelection, selectedText: "$_selectedText", cause: $cause, shouldShowToolbar: $shouldShowToolbar');
+
+                  if (shouldShowToolbar) {
+                    debugPrint('Forcing system toolbar to show immediately');
+
+                    // Force toolbar immediately with synchronous call and rebuild
+                    final editableTextState = _selectableTextKey.currentContext
+                        ?.findAncestorStateOfType<EditableTextState>();
+                    if (editableTextState != null) {
+                      debugPrint('Calling showToolbar synchronously');
+                      editableTextState.showToolbar();
+
+                      // Force a rebuild to ensure UI updates immediately
+                      if (mounted) {
+                        setState(() {});
+                      }
+
+                      // Also schedule multiple additional calls
+                      for (int i = 0; i < 10; i++) {
+                        Future.delayed(Duration(milliseconds: i * 50), () {
+                          if (mounted) {
+                            final state = _selectableTextKey.currentContext
+                                ?.findAncestorStateOfType<EditableTextState>();
+                            if (state != null) {
+                              debugPrint('Calling showToolbar async attempt ${i + 1}');
+                              state.showToolbar();
+                              // Force rebuild on each call
+                              setState(() {});
+                            }
+                          }
+                        });
+                      }
+                    }
+                  }
+
+                  widget.onSelectionChanged?.call(hasSelection, _clearSelection);
+                },
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    
+    // Fallback to original implementation for pages with images
+    final children = <Widget>[];
     for (final block in widget.content.blocks) {
       if (block.spacingBefore > 0) {
         children.add(SizedBox(height: block.spacingBefore));
@@ -90,21 +217,14 @@ class _PageContentViewState extends State<PageContentView> {
             textAlign: block.textAlign,
             textHeightBehavior: widget.textHeightBehavior,
             textScaler: widget.textScaler,
-            contextMenuBuilder: (context, editableTextState) {
-              final items = PageContentView.buildSelectionActionItems(
-                baseItems: editableTextState.contextMenuButtonItems.toList(),
-                onSelectionAction: widget.onSelectionAction,
-                selectedText: _selectedText,
-                actionLabel: widget.actionLabel,
-                clearSelection: _clearSelection,
-                hideToolbar: editableTextState.hideToolbar,
-                isProcessingAction: widget.isProcessingAction,
-              );
-              return AdaptiveTextSelectionToolbar.buttonItems(
-                anchors: editableTextState.contextMenuAnchors,
-                buttonItems: items,
-              );
-            },
+            selectionControls: ImmediateTextSelectionControls(
+              onSelectionAction: widget.onSelectionAction,
+              actionLabel: widget.actionLabel,
+              clearSelection: _clearSelection,
+              isProcessingAction: widget.isProcessingAction,
+              getSelectedText: () => _selectedText,
+            ),
+            contextMenuBuilder: null, // Disable default context menu
             onSelectionChanged: (selection, cause) {
               final base = selection.baseOffset;
               final extent = selection.extentOffset;
@@ -121,9 +241,44 @@ class _PageContentViewState extends State<PageContentView> {
                       upper.clamp(0, block.text.length),
                     )
                   : '';
-              setState(() {
-                _selectedText = selected;
-              });
+              
+              // Update internal state
+              _selectedText = selected;
+              final shouldShowToolbar = hasSelection && (_selectedText.isNotEmpty || cause == SelectionChangedCause.longPress);
+
+              if (shouldShowToolbar) {
+                debugPrint('Forcing system toolbar to show immediately for block');
+
+                // Force toolbar immediately with synchronous call and rebuild
+                final editableTextState = _selectableTextKey.currentContext
+                    ?.findAncestorStateOfType<EditableTextState>();
+                if (editableTextState != null) {
+                  debugPrint('Calling showToolbar synchronously for block');
+                  editableTextState.showToolbar();
+
+                  // Force a rebuild to ensure UI updates immediately
+                  if (mounted) {
+                    setState(() {});
+                  }
+
+                  // Also schedule multiple additional calls
+                  for (int i = 0; i < 10; i++) {
+                    Future.delayed(Duration(milliseconds: i * 50), () {
+                      if (mounted) {
+                        final state = _selectableTextKey.currentContext
+                            ?.findAncestorStateOfType<EditableTextState>();
+                        if (state != null) {
+                          debugPrint('Calling showToolbar async for block attempt ${i + 1}');
+                          state.showToolbar();
+                          // Force rebuild on each call
+                          setState(() {});
+                        }
+                      }
+                    });
+                  }
+                }
+              }
+
               widget.onSelectionChanged?.call(hasSelection, _clearSelection);
             },
           ),
@@ -157,6 +312,68 @@ class _PageContentViewState extends State<PageContentView> {
         children: children,
       ),
     );
+  }
+
+  TextSpan? _buildCombinedTextSpan() {
+    final textSpans = <InlineSpan>[];
+    int currentOffset = 0;
+    _blockOffsets.clear();
+    
+    for (final block in widget.content.blocks) {
+      if (block is TextPageBlock) {
+        _blockOffsets.add(_BlockOffsetInfo(
+          startOffset: currentOffset,
+          endOffset: currentOffset + block.text.length,
+          block: block,
+        ));
+        
+        // Add spacing before as newlines
+        if (block.spacingBefore > 0) {
+          final newlineCount = (block.spacingBefore / 20).ceil(); // Approximate
+          textSpans.add(TextSpan(text: '\n' * newlineCount));
+          currentOffset += newlineCount;
+        }
+        
+        // Add the block text
+        final blockSpan = _buildRichTextSpan(block);
+        textSpans.add(blockSpan);
+        currentOffset += block.text.length;
+        
+        // Add spacing after as newlines
+        if (block.spacingAfter > 0) {
+          final newlineCount = (block.spacingAfter / 20).ceil(); // Approximate
+          textSpans.add(TextSpan(text: '\n' * newlineCount));
+          currentOffset += newlineCount;
+        }
+      }
+    }
+    
+    if (textSpans.isEmpty) return null;
+    
+    return TextSpan(
+      children: textSpans,
+      style: widget.content.blocks.isNotEmpty && widget.content.blocks.first is TextPageBlock
+          ? (widget.content.blocks.first as TextPageBlock).baseStyle
+          : const TextStyle(),
+    );
+  }
+
+  String _extractSelectedText(int start, int end) {
+    final selectedParts = <String>[];
+    for (final blockInfo in _blockOffsets) {
+      final blockStart = blockInfo.startOffset;
+      final blockEnd = blockInfo.endOffset;
+      
+      // Check if selection overlaps with this block
+      if (end > blockStart && start < blockEnd) {
+        final overlapStart = (start - blockStart).clamp(0, blockInfo.block.text.length);
+        final overlapEnd = (end - blockStart).clamp(0, blockInfo.block.text.length);
+        if (overlapEnd > overlapStart) {
+          selectedParts.add(blockInfo.block.text.substring(overlapStart, overlapEnd));
+        }
+      }
+    }
+    return selectedParts.join(' ');
   }
 
   TextSpan _buildRichTextSpan(TextPageBlock block) {

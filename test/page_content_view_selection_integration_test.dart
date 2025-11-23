@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,9 +7,10 @@ import 'package:memoreader/screens/reader/page_content_view.dart';
 
 void main() {
   group('PageContentView selection integration', () {
-    testWidgets('long press selects text and shows selection toolbar', (WidgetTester tester) async {
+    testWidgets('long press selects text on FIRST attempt (not second)', (WidgetTester tester) async {
       final blockText = 'Hold to select this text.';
-      bool selectionActivated = false;
+      int selectionChangeCount = 0;
+      bool firstAttemptWorked = false;
 
       final page = PageContent(
         blocks: [
@@ -52,7 +54,10 @@ void main() {
                 actionLabel: 'Translate',
                 onSelectionAction: (_) {},
                 onSelectionChanged: (hasSelection, _) {
-                  if (hasSelection) selectionActivated = true;
+                  selectionChangeCount++;
+                  if (hasSelection && selectionChangeCount == 1) {
+                    firstAttemptWorked = true;
+                  }
                 },
                 isProcessingAction: false,
               ),
@@ -63,15 +68,20 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      // Long press the rendered text to trigger selection.
       final selectableFinder = find.byType(SelectableText);
       expect(selectableFinder, findsOneWidget);
 
+      // Simulate a single long press - should work on FIRST attempt
       await tester.longPress(selectableFinder);
-      await tester.pumpAndSettle();
+      await tester.pumpAndSettle(const Duration(seconds: 1));
 
-      // Expect selection to be reported and toolbar to be visible.
-      expect(selectionActivated, isTrue);
+      // CRITICAL: Selection should activate on first attempt
+      expect(firstAttemptWorked, isTrue, 
+        reason: 'Selection must work on FIRST long press, not require two attempts');
+      expect(selectionChangeCount, greaterThan(0), 
+        reason: 'Selection should change on first long press');
     });
+
+
   });
 }
