@@ -226,6 +226,51 @@ class EnhancedSummaryService {
   }
 
   /// Extract text from the book up to a specific character index.
+  /// Extract text for a specific character range (for debugging purposes)
+  Future<String> extractTextForCharacterRange(Book book, int startCharacterIndex, int endCharacterIndex) async {
+    try {
+      final epub = await _bookService.loadEpubBook(book.filePath);
+      final parsedChapters = _parseChapters(epub);
+      final orderedSections =
+          parsedChapters.isNotEmpty ? parsedChapters : _fallbackSectionsFromContent(epub);
+
+      final buffer = StringBuffer();
+      int currentOffset = 0;
+
+      for (final section in orderedSections) {
+        final plainText = _extractTextFromHtml(section.htmlContent);
+        if (plainText.isEmpty) {
+          continue;
+        }
+
+        final sectionStart = currentOffset;
+        final sectionEnd = currentOffset + plainText.length;
+
+        // Check if this section overlaps with the requested range
+        if (sectionEnd > startCharacterIndex && sectionStart < endCharacterIndex) {
+          final overlapStart = math.max(startCharacterIndex - sectionStart, 0);
+          final overlapEnd = math.min(endCharacterIndex - sectionStart, plainText.length);
+
+          if (overlapEnd > overlapStart) {
+            buffer.write(plainText.substring(overlapStart, overlapEnd));
+          }
+        }
+
+        currentOffset += plainText.length;
+
+        // Early exit if we've passed the end of the requested range
+        if (currentOffset >= endCharacterIndex) {
+          break;
+        }
+      }
+
+      return buffer.toString();
+    } catch (e) {
+      debugPrint('Error extracting text for range $startCharacterIndex-$endCharacterIndex: $e');
+      return 'Error extracting text: $e';
+    }
+  }
+
   Future<List<ChapterText>> _extractTextUpToCharacterIndex(
     Book book,
     int targetCharacterIndex,
@@ -389,47 +434,22 @@ class EnhancedSummaryService {
     String language, {
     bool ensureChunkSummaries = true,
     double? readingProgressFraction,
-    String? preparedEngineText,
+    required String preparedEngineText,
   }) async {
-    debugPrint('[SummaryDebug] _prepareTextData called: targetCharacterIndex=$targetCharacterIndex, ensureChunkSummaries=$ensureChunkSummaries, preparedEngineText length=${preparedEngineText?.length ?? 0}');
-    // If an engine-prepared text stream is provided, prefer it to ensure
-    // character indices match the pagination engine exactly.
-    String fullText;
-    if (preparedEngineText != null) {
-      if (preparedEngineText.isEmpty) {
-        debugPrint('[SummaryDebug] _prepareTextData: preparedEngineText is empty, returning empty');
-        return const _PreparedTextData(fullText: '', chunks: <_ChunkDefinition>[]);
-      }
-      final safeEnd = math.min(targetCharacterIndex, preparedEngineText.length);
-      if (safeEnd <= 0) {
-        debugPrint('[SummaryDebug] _prepareTextData: safeEnd <= 0 ($safeEnd), returning empty');
-        return const _PreparedTextData(fullText: '', chunks: <_ChunkDefinition>[]);
-      }
-      fullText = preparedEngineText.substring(0, safeEnd);
-      debugPrint('[SummaryDebug] _prepareTextData: Using preparedEngineText, extracted ${fullText.length} characters');
-    } else {
-      debugPrint('[SummaryDebug] _prepareTextData: Extracting text from book...');
-      final chapterTexts = await _extractTextUpToCharacterIndex(
-        book,
-        targetCharacterIndex,
-      );
-      debugPrint('[SummaryDebug] _prepareTextData: Extracted ${chapterTexts.length} chapters');
+    debugPrint('[SummaryDebug] _prepareTextData called: targetCharacterIndex=$targetCharacterIndex, ensureChunkSummaries=$ensureChunkSummaries, preparedEngineText length=${preparedEngineText.length}');
 
-      if (chapterTexts.isEmpty) {
-        debugPrint('[SummaryDebug] _prepareTextData: No chapter texts, returning empty');
-        return const _PreparedTextData(
-          fullText: '',
-          chunks: <_ChunkDefinition>[],
-        );
-      }
-
-      final buffer = StringBuffer();
-      for (final chapterText in chapterTexts) {
-        buffer.write(chapterText.text);
-      }
-      fullText = buffer.toString();
-      debugPrint('[SummaryDebug] _prepareTextData: Built fullText from chapters, length=${fullText.length}');
+    // Always use the prepared engine text for continuous text flow
+    if (preparedEngineText.isEmpty) {
+      debugPrint('[SummaryDebug] _prepareTextData: preparedEngineText is empty, returning empty');
+      return const _PreparedTextData(fullText: '', chunks: <_ChunkDefinition>[]);
     }
+    final safeEnd = math.min(targetCharacterIndex, preparedEngineText.length);
+    if (safeEnd <= 0) {
+      debugPrint('[SummaryDebug] _prepareTextData: safeEnd <= 0 ($safeEnd), returning empty');
+      return const _PreparedTextData(fullText: '', chunks: <_ChunkDefinition>[]);
+    }
+    final fullText = preparedEngineText.substring(0, safeEnd);
+    debugPrint('[SummaryDebug] _prepareTextData: Using preparedEngineText, extracted ${fullText.length} characters');
 
     // Debug: Log the full text captured up to the target (can be large)
     if (kDebugMode) {
@@ -1199,7 +1219,7 @@ class EnhancedSummaryService {
     Book book,
     ReadingProgress progress,
     String languageCode, {
-    String? preparedEngineText,
+    required String preparedEngineText,
     VoidCallback? onCacheHit,
   }) async {
     try {
@@ -1216,25 +1236,8 @@ class EnhancedSummaryService {
         return 'No content read yet.';
       }
 
-      // First, get the text up to the current position to determine the extended index
-      String fullTextForExtension;
-      if (preparedEngineText != null) {
-        // Use prepared engine text if available
-        fullTextForExtension = preparedEngineText;
-      } else {
-        // Extract text from book up to a reasonable maximum to calculate extension
-        // We'll extract up to current + estimated 200 words worth (roughly 1000 chars)
-        final estimatedMaxIndex = currentCharacterIndex + 1000;
-        final chapterTexts = await _extractTextUpToCharacterIndex(
-          book,
-          estimatedMaxIndex,
-        );
-        final buffer = StringBuffer();
-        for (final chapterText in chapterTexts) {
-          buffer.write(chapterText.text);
-        }
-        fullTextForExtension = buffer.toString();
-      }
+      // Use the prepared engine text for continuous text flow
+      final fullTextForExtension = preparedEngineText;
 
       // Extend the character index by 200 words for overlap
       final extendedCharacterIndex = _extendCharacterIndexByWords(
@@ -1356,7 +1359,7 @@ class EnhancedSummaryService {
     Book book,
     ReadingProgress progress,
     String languageCode, {
-    String? preparedEngineText,
+    required String preparedEngineText,
     VoidCallback? onCacheHit,
   }) async {
     try {
@@ -1711,7 +1714,7 @@ Concise summary:''';
     Book book,
     ReadingProgress progress,
     String languageCode, {
-    String? preparedEngineText,
+    required String preparedEngineText,
     VoidCallback? onCacheHit,
   }) async {
     try {

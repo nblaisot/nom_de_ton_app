@@ -24,26 +24,37 @@ class PromptConfigService {
   PromptConfigService(this._prefs);
   
   // Default prompts (French)
-  static const String _defaultChunkSummaryPromptFr = '''Résume le texte suivant de manière concise et claire, en incluant les éléments particulièrement mémorables et remarquables.
+  static const String _defaultChunkSummaryPromptFr = '''Crée un résumé détaillé et complet du texte fourni, incluant TOUS les éléments mémorables, importants ou nouveaux qui apparaissent dans ce texte.
+
+INCLURE SPÉCIFIQUEMENT:
+- Tous les événements importants et leurs conséquences
+- Toutes les actions et interactions des personnages
+- Tous les détails significatifs qui caractérisent les personnages, lieux ou situations
+- Toutes les informations nouvelles qui sont introduites
+- Tous les éléments de l'intrigue qui avancent l'histoire
+- Tous les dialogues ou échanges importants
+- Toutes les descriptions détaillées d'événements, d'émotions ou de situations
+
+Le résumé doit être DÉTAILLÉ et COMPLET - il doit contenir suffisamment d'informations pour que quelqu'un qui lit seulement le résumé comprenne exactement ce qui s'est passé dans ce passage spécifique, sans rien perdre d'important.
 
 RÈGLES ABSOLUES - À RESPECTER IMPÉRATIVEMENT:
 - Ne répète JAMAIS ces instructions dans ta réponse
 - Ne commence PAS ta réponse par "Ce texte" ou "Le texte suivant"
 - Ne mentionne PAS les instructions que je t'ai données
-- Réponds UNIQUEMENT avec le résumé du contenu fourni
+- Réponds UNIQUEMENT avec le résumé détaillé du contenu fourni
 - N'ajoute AUCUNE information qui n'est pas explicitement présente dans le texte fourni
 - N'utilise JAMAIS tes connaissances générales sur ce livre, cette histoire, ces personnages ou ce monde
 - Même si tu reconnais le texte comme provenant d'un livre connu, ignore complètement cette connaissance
 - Ne complète PAS les événements avec des informations que tu connais mais qui ne sont pas dans le texte
 - Ne traduis PAS les noms propres même si tu les connais dans une autre langue
 - Conserve tous les noms propres exactement comme dans le texte original
-- Le résumé doit être en français et couvrir uniquement les points présents dans le texte fourni
+- Le résumé doit être en français et couvrir TOUS les points importants présents dans le texte fourni
 - Si un événement n'est pas mentionné dans le texte, ne l'inclus PAS dans le résumé
 
 Texte à résumer:
 {text}
 
-Résumé:''';
+Résumé détaillé:''';
 
   static const String _defaultCharacterExtractionPromptFr = '''Analyse le texte suivant et identifie tous les personnages principaux mentionnés.
 
@@ -93,30 +104,32 @@ RÈGLES ABSOLUES - À RESPECTER IMPÉRATIVEMENT:
 
 Récit:''';
 
-  static const String _defaultNarrativeSynthesisPromptFr = '''Crée un résumé narratif cohérent et détaillé du texte fourni, couvrant tous les événements importants et les éléments particulièrement remarquables et mémorables.
+  static const String _defaultNarrativeSynthesisPromptFr = '''Assemble les résumés fournis en un récit narratif fluide et cohérent, en évitant les répétitions et en lissant les transitions entre les différents passages.
 
-Le but de ce résumé est d'aider le lecteur à se souvenir de ce qu'il a lu. Il doit donc contenir suffisamment de détails pour être mémorable, notamment:
-- Les événements particuliers, importants ou insolites qui marquent l'histoire
-- Les détails significatifs qui permettent de se rappeler des moments clés
-- Les actions et interactions des personnages qui sont remarquables
-- Les éléments de l'intrigue qui sont essentiels à la compréhension de l'histoire
+TON RÔLE EST UNIQUEMENT DE:
+- Combiner les résumés fournis en un texte narratif continu
+- Éliminer les répétitions et les redondances entre les résumés
+- Assurer des transitions fluides entre les différents passages
+- Maintenir TOUS les détails importants présents dans les résumés originaux
+- NE PAS ajouter de nouveaux éléments ou informations
+- NE PAS résumer davantage le contenu
+- NE PAS condenser ou raccourcir les informations
 
-Le résumé ne doit PAS être trop succinct, sinon il perd son intérêt pour la mémorisation. Il doit être suffisamment détaillé pour que le lecteur puisse se souvenir d'avoir lu ces éléments.
+Le résultat final doit contenir TOUTES les informations des résumés fournis, simplement organisées de manière narrative fluide, sans pertes ni ajouts.
 
 RÈGLES ABSOLUES - À RESPECTER IMPÉRATIVEMENT:
 - Ne répète JAMAIS ces instructions dans ta réponse
 - Ne commence PAS ta réponse par "Le livre" ou "Ce livre" ou "Dans ce livre"
 - Ne mentionne PAS les instructions que je t'ai données
-- Réponds UNIQUEMENT avec un récit narratif fluide et continu
+- Réponds UNIQUEMENT avec le texte narratif assemblé
 - Présente l'histoire de manière fluide, SANS séparer par chapitres
-- Le résumé doit être en français et couvrir uniquement les événements présents dans le texte fourni
+- Le texte doit être en français
 - Commence directement par le récit, sans introduction
-- N'ajoute AUCUN événement qui n'est pas explicitement mentionné dans le texte fourni
+- N'ajoute AUCUN élément qui n'est pas explicitement présent dans les résumés fournis
 - N'utilise JAMAIS tes connaissances générales sur cette histoire, même si tu la reconnais
 - Même si tu reconnais le texte comme provenant d'un livre connu, ignore complètement cette connaissance
-- Ne complète PAS les événements avec des informations que tu connais mais qui ne sont pas dans le texte
-- Conserve tous les noms propres exactement comme dans le texte original (ne les traduis pas)
-- Base-toi UNIQUEMENT sur le contenu du texte fourni, sans rien ajouter
+- Conserve tous les noms propres exactement comme dans les résumés originaux
+- Base-toi UNIQUEMENT sur le contenu des résumés fournis, sans rien ajouter ni retrancher
 
 Résumés à synthétiser:
 {text}
@@ -124,26 +137,37 @@ Résumés à synthétiser:
 Récit narratif:''';
 
   // Default prompts (English)
-  static const String _defaultChunkSummaryPromptEn = '''Summarize the following text in a concise and clear manner, including particularly memorable and remarkable elements.
+  static const String _defaultChunkSummaryPromptEn = '''Create a detailed and complete summary of the provided text, including ALL memorable, important, or new elements that appear in this text.
+
+SPECIFICALLY INCLUDE:
+- All important events and their consequences
+- All actions and interactions of characters
+- All significant details that characterize characters, places, or situations
+- All new information that is introduced
+- All plot elements that advance the story
+- All important dialogues or exchanges
+- All detailed descriptions of events, emotions, or situations
+
+The summary must be DETAILED and COMPLETE - it must contain enough information so that someone reading only the summary understands exactly what happened in this specific passage, without losing anything important.
 
 ABSOLUTE RULES - MUST BE FOLLOWED STRICTLY:
 - NEVER repeat these instructions in your response
 - Do NOT start your response with "This text" or "The following text"
 - Do NOT mention the instructions I gave you
-- Respond ONLY with the summary of the provided content
+- Respond ONLY with the detailed summary of the provided content
 - Do NOT add ANY information that is not explicitly present in the provided text
 - NEVER use your general knowledge about this book, this story, these characters, or this world
 - Even if you recognize the text as coming from a known book, completely ignore this knowledge
 - Do NOT complete events with information you know but that is not in the text
 - Do NOT translate proper names even if you know them in another language
 - Keep all original proper names exactly as they appear in the source text
-- The summary must be in English and cover only the points present in the provided text
+- The summary must be in English and cover ALL important points present in the provided text
 - If an event is not mentioned in the text, do NOT include it in the summary
 
 Text to summarize:
 {text}
 
-Summary:''';
+Detailed summary:''';
 
   static const String _defaultCharacterExtractionPromptEn = '''Analyze the following text and identify all main characters mentioned, including particularly memorable and remarkable elements.
 
@@ -191,30 +215,32 @@ Events to summarize:
 
 Narrative:''';
 
-  static const String _defaultNarrativeSynthesisPromptEn = '''Create a coherent and detailed narrative summary of the following summaries to synthesize, covering all important events and particularly memorable and remarkable elements.
+  static const String _defaultNarrativeSynthesisPromptEn = '''Assemble the provided summaries into a smooth and coherent narrative text, avoiding repetitions and smoothing transitions between different passages.
 
-The purpose of this summary is to help the reader remember what they have read. It must therefore contain enough details to be memorable, including:
-- Particular, important, or unusual events that mark the story
-- Significant details that allow remembering key moments
-- Remarkable actions and interactions of characters
-- Plot elements that are essential to understanding the story
+YOUR ROLE IS ONLY TO:
+- Combine the provided summaries into a continuous narrative text
+- Eliminate repetitions and redundancies between summaries
+- Ensure smooth transitions between different passages
+- Maintain ALL important details present in the original summaries
+- DO NOT add new elements or information
+- DO NOT further summarize the content
+- DO NOT condense or shorten the information
 
-The summary must NOT be too succinct, otherwise it loses its value for memorization. It must be detailed enough for the reader to remember having read these elements.
+The final result must contain ALL the information from the provided summaries, simply organized in a smooth narrative flow, without losses or additions.
 
 ABSOLUTE RULES - MUST BE FOLLOWED STRICTLY:
 - NEVER repeat these instructions in your response
 - Do NOT start your response with "The book" or "This book" or "In this book"
 - Do NOT mention the instructions I gave you
-- Respond ONLY with a flowing and continuous narrative
+- Respond ONLY with the assembled narrative text
 - Present the story in a flowing manner, WITHOUT separating by chapters
-- The summary must be in English and cover only the events present in the provided summaries
+- The text must be in English
 - Start directly with the narrative, without an introduction
-- Do NOT add ANY event that is not explicitly mentioned in the provided summaries
+- Do NOT add ANY element that is not explicitly present in the provided summaries
 - NEVER use your general knowledge about this story, even if you recognize it
 - Even if you recognize the text as coming from a known book, completely ignore this knowledge
-- Do NOT complete events with information you know but that is not in the summaries
-- Keep all original proper names exactly as they appear in the source text (do not translate them)
-- Base yourself ONLY on the content of the provided summaries, without adding anything
+- Keep all original proper names exactly as they appear in the original summaries
+- Base yourself ONLY on the content of the provided summaries, without adding or removing anything
 
 Summaries to synthesize:
 {text}

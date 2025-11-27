@@ -21,6 +21,9 @@ class SummaryDebugScreen extends StatefulWidget {
 class _SummaryDebugScreenState extends State<SummaryDebugScreen> {
   List<BookSummaryChunk> _chunks = [];
   bool _isLoading = true;
+  final Map<int, bool> _showingSourceText = {};
+  final Map<int, String> _sourceTexts = {};
+  final Map<int, bool> _loadingSourceText = {};
 
   @override
   void initState() {
@@ -45,6 +48,44 @@ class _SummaryDebugScreenState extends State<SummaryDebugScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  Future<void> _loadSourceText(int chunkIndex) async {
+    final chunk = _chunks.firstWhere((c) => c.chunkIndex == chunkIndex);
+    if (chunk.startCharacterIndex == null || chunk.endCharacterIndex == null) {
+      return;
+    }
+
+    setState(() {
+      _loadingSourceText[chunkIndex] = true;
+    });
+
+    try {
+      final sourceText = await widget.enhancedSummaryService.extractTextForCharacterRange(
+        widget.book,
+        chunk.startCharacterIndex!,
+        chunk.endCharacterIndex!,
+      );
+      setState(() {
+        _sourceTexts[chunkIndex] = sourceText;
+        _showingSourceText[chunkIndex] = true;
+        _loadingSourceText[chunkIndex] = false;
+      });
+    } catch (e) {
+      debugPrint('Error loading source text for chunk $chunkIndex: $e');
+      setState(() {
+        _sourceTexts[chunkIndex] = 'Error loading source text: $e';
+        _showingSourceText[chunkIndex] = true;
+        _loadingSourceText[chunkIndex] = false;
+      });
+    }
+  }
+
+  void _toggleSourceText(int chunkIndex) {
+    setState(() {
+      final currentValue = _showingSourceText[chunkIndex] ?? false;
+      _showingSourceText[chunkIndex] = !currentValue;
+    });
   }
 
   @override
@@ -101,24 +142,106 @@ class _SummaryDebugScreenState extends State<SummaryDebugScreen> {
                           ],
                         ),
                         children: [
+                          // Summary section
                           Padding(
                             padding: const EdgeInsets.all(16.0),
-                            child: MarkdownBody(
-                              data: chunk.summaryText,
-                              styleSheet: MarkdownStyleSheet(
-                                p: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                      height: 1.6,
-                                    ),
-                                h1: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                h2: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                h3: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                              ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Résumé:',
+                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                ),
+                                const SizedBox(height: 8),
+                                MarkdownBody(
+                                  data: chunk.summaryText,
+                                  styleSheet: MarkdownStyleSheet(
+                                    p: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                          height: 1.6,
+                                        ),
+                                    h1: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                    h2: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                    h3: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                // Source text button
+                                if (chunk.startCharacterIndex != null && chunk.endCharacterIndex != null)
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: ElevatedButton.icon(
+                                          onPressed: _loadingSourceText[chunk.chunkIndex] == true
+                                              ? null
+                                              : () {
+                                                  if (_sourceTexts.containsKey(chunk.chunkIndex)) {
+                                                    _toggleSourceText(chunk.chunkIndex);
+                                                  } else {
+                                                    _loadSourceText(chunk.chunkIndex);
+                                                  }
+                                                },
+                                          icon: _loadingSourceText[chunk.chunkIndex] == true
+                                              ? const SizedBox(
+                                                  width: 16,
+                                                  height: 16,
+                                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                                )
+                                              : Icon(_showingSourceText[chunk.chunkIndex] == true
+                                                  ? Icons.visibility_off
+                                                  : Icons.visibility),
+                                          label: Text(_loadingSourceText[chunk.chunkIndex] == true
+                                              ? 'Chargement...'
+                                              : (_showingSourceText[chunk.chunkIndex] == true
+                                                  ? 'Masquer le texte source'
+                                                  : 'Voir le texte source')),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                // Source text display
+                                if (_showingSourceText[chunk.chunkIndex] == true && _sourceTexts.containsKey(chunk.chunkIndex))
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const SizedBox(height: 16),
+                                      Text(
+                                        'Texte source:',
+                                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.3),
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(
+                                            color: Theme.of(context).colorScheme.outline.withOpacity(0.3),
+                                          ),
+                                        ),
+                                        constraints: const BoxConstraints(maxHeight: 300),
+                                        child: SingleChildScrollView(
+                                          child: Text(
+                                            _sourceTexts[chunk.chunkIndex]!,
+                                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                                  fontFamily: 'monospace',
+                                                  height: 1.4,
+                                                ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                              ],
                             ),
                           ),
                         ],
