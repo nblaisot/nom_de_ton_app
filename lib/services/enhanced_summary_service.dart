@@ -1055,13 +1055,6 @@ class EnhancedSummaryService {
     debugPrint(
         '[SummaryDebug] Last chunk candidate idx=${lastPreparedChunk.index} preparedRange=${lastPreparedChunk.start}-$preparedEnd cachedRange=${originalSummary.startCharacterIndex}-$cachedEnd');
 
-    // If the cached chunk already ends at or before the visible end, nothing to adjust.
-    if (preparedEnd >= cachedEnd) {
-      debugPrint(
-          '[SummaryDebug] No adjustment needed for chunk ${lastPreparedChunk.index} (prepared end >= cached end)');
-      return chunkSummaries;
-    }
-
     try {
       final safeStart =
           math.max(0, math.min(lastPreparedChunk.start, preparedFullText.length));
@@ -1070,6 +1063,12 @@ class EnhancedSummaryService {
         math.min(preparedFullText.length, preparedEnd),
       );
       final visibleChunkSource = preparedFullText.substring(safeStart, safeEnd);
+      final visibleHash = _hashText(visibleChunkSource);
+      if (cachedEnd == preparedEnd && originalSummary.contentHash == visibleHash) {
+        debugPrint(
+            '[SummaryDebug] No adjustment needed for chunk ${lastPreparedChunk.index} (already aligned with visible stop)');
+        return chunkSummaries;
+      }
       debugPrint(
           '[SummaryDebug] Trimming chunk ${lastPreparedChunk.index} to $safeStart-$safeEnd (original cached end $cachedEnd)');
 
@@ -1097,7 +1096,7 @@ class EnhancedSummaryService {
         characterNotesJson: originalSummary.characterNotesJson,
         startCharacterIndex: safeStart,
         endCharacterIndex: safeEnd,
-        contentHash: _hashText(visibleChunkSource),
+        contentHash: visibleHash,
         events: originalSummary.events,
         characterNotes: originalSummary.characterNotes,
       );
