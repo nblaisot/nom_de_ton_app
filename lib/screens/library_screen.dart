@@ -375,6 +375,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
       child: InkWell(
         onTap: () => _openBook(book),
         onLongPress: () => _showDeleteDialog(book, index),
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -473,6 +475,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
         borderRadius: BorderRadius.circular(12),
         onTap: () => _openBook(book),
         onLongPress: () => _showDeleteDialog(book, index),
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Row(
