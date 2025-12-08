@@ -13,8 +13,8 @@ Future<void> showReaderMenu({
   required VoidCallback onGoToChapter,
   required VoidCallback onGoToPercentage,
   required VoidCallback onShowSummaryFromBeginning,
-  required VoidCallback onShowSummarySinceLastTime,
   required VoidCallback onShowCharactersSummary,
+  required VoidCallback onDeleteSummaries,
   required VoidCallback onReturnToLibrary,
 }) {
   return showGeneralDialog<void>(
@@ -42,9 +42,8 @@ Future<void> showReaderMenu({
         onGoToPercentage: () => handleAction(onGoToPercentage),
         onShowSummaryFromBeginning:
             () => handleAction(onShowSummaryFromBeginning),
-        onShowSummarySinceLastTime:
-            () => handleAction(onShowSummarySinceLastTime),
         onShowCharactersSummary: () => handleAction(onShowCharactersSummary),
+        onDeleteSummaries: () => handleAction(onDeleteSummaries),
         onReturnToLibrary: () => handleAction(onReturnToLibrary),
       );
     },
@@ -75,8 +74,8 @@ class _ReaderMenuDialog extends StatefulWidget {
     required this.onGoToChapter,
     required this.onGoToPercentage,
     required this.onShowSummaryFromBeginning,
-    required this.onShowSummarySinceLastTime,
     required this.onShowCharactersSummary,
+    required this.onDeleteSummaries,
     required this.onReturnToLibrary,
   });
 
@@ -87,8 +86,8 @@ class _ReaderMenuDialog extends StatefulWidget {
   final VoidCallback onGoToChapter;
   final VoidCallback onGoToPercentage;
   final VoidCallback onShowSummaryFromBeginning;
-  final VoidCallback onShowSummarySinceLastTime;
   final VoidCallback onShowCharactersSummary;
+  final VoidCallback onDeleteSummaries;
   final VoidCallback onReturnToLibrary;
 
   @override
@@ -103,7 +102,6 @@ class _ReaderMenuDialogState extends State<_ReaderMenuDialog> {
     final l10n = AppLocalizations.of(context);
     final summariesTitle = l10n?.summariesSectionTitle ?? 'Summaries';
     final fromBeginningLabel = l10n?.summaryFromBeginning ?? 'From the Beginning';
-    final sinceLastTimeLabel = l10n?.summarySinceLastTime ?? 'Since last time';
     final charactersLabel = l10n?.summaryCharacters ?? 'Characters';
 
     return SafeArea(
@@ -179,15 +177,15 @@ class _ReaderMenuDialogState extends State<_ReaderMenuDialog> {
                       contentPadding: EdgeInsets.zero,
                     ),
                     ListTile(
-                      leading: const Icon(Icons.history_toggle_off),
-                      title: Text(sinceLastTimeLabel),
-                      onTap: widget.onShowSummarySinceLastTime,
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                    ListTile(
                       leading: const Icon(Icons.people_outline),
                       title: Text(charactersLabel),
                       onTap: widget.onShowCharactersSummary,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    ListTile(
+                      leading: const Icon(Icons.delete_outline),
+                      title: Text(l10n?.summariesDeleteAction ?? 'Supprimer les résumés'),
+                      onTap: widget.onDeleteSummaries,
                       contentPadding: EdgeInsets.zero,
                     ),
                     ListTile(
@@ -232,7 +230,7 @@ class _FontScaleSelector extends StatelessWidget {
           onPressed: isAtMin ? null : onDecrement,
           tooltip: 'Réduire la taille',
           style: IconButton.styleFrom(
-            backgroundColor: theme.colorScheme.surfaceVariant,
+            backgroundColor: theme.colorScheme.surfaceContainerHighest,
             foregroundColor: isAtMin 
                 ? theme.colorScheme.onSurface.withValues(alpha: 0.38)
                 : theme.colorScheme.onSurface,
@@ -251,7 +249,7 @@ class _FontScaleSelector extends StatelessWidget {
           onPressed: isAtMax ? null : onIncrement,
           tooltip: 'Augmenter la taille',
           style: IconButton.styleFrom(
-            backgroundColor: theme.colorScheme.surfaceVariant,
+            backgroundColor: theme.colorScheme.surfaceContainerHighest,
             foregroundColor: isAtMax 
                 ? theme.colorScheme.onSurface.withValues(alpha: 0.38)
                 : theme.colorScheme.onSurface,

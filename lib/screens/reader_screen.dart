@@ -1,13 +1,11 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' show PointerDeviceKind;
 import 'package:epubx/epubx.dart';
-import 'package:flutter/material.dart' as material;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart'
     show PointerCancelEvent, PointerDownEvent, PointerMoveEvent, PointerUpEvent, kPrimaryButton, kTouchSlop;
-import 'package:meta/meta.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -32,7 +30,6 @@ import 'reader/page_content_view.dart';
 import 'reader/tap_zones.dart';
 import 'reader/reader_menu.dart';
 import 'reader/navigation_helper.dart';
-import 'reader/immediate_text_selection_controls.dart';
 import 'routes.dart';
 import 'settings_screen.dart';
 import 'summary_screen.dart';
@@ -76,11 +73,16 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
   double _progress = 0;
   int _totalCharacterCount = 0;
   int _currentCharacterIndex = 0;
+  int? _lastVisibleCharacterIndex;
 
   bool _isLoading = true;
   String? _errorMessage;
 
   bool _showProgressBar = false;
+  bool _isNavigating = false; // Track when navigation/repagination is in progress
+  int? _navigatingToChapterIndex; // Track which chapter is being navigated to
+  NavigatorState? _chapterDialogNavigator; // Reference to chapter dialog's Navigator for closing
+  VoidCallback? _chapterDialogRebuildCallback; // Callback to trigger dialog rebuild
   double _fontScale = 1.0; // Font scale multiplier (1.0 = normal)
 
   ReadingProgress? _savedProgress;
@@ -235,6 +237,8 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
         _chapterEntries = extraction.chapters;
         _totalCharacterCount = extraction.totalCharacters;
         _savedProgress = progress;
+        _lastVisibleCharacterIndex =
+            progress?.lastVisibleCharacterIndex ?? progress?.currentCharacterIndex;
         _isLoading = false;
       });
 
@@ -272,65 +276,123 @@ class _ReaderScreenState extends State<ReaderScreen> with WidgetsBindingObserver
   Future<void> _rebuildPagination(int startCharIndex, {Size? actualSize}) async {
     if (!mounted || _docBlocks.isEmpty) return;
 
-    Size? sizeForMetrics = actualSize ?? _lastActualSize;
-    if (!mounted) return;
-    sizeForMetrics ??= MediaQuery.of(context).size;
-    final baseMetrics = _computePageMetrics(context, sizeForMetrics);
-    final metrics = _adjustForUserPadding(baseMetrics);
+    // Navigation state should already be set when chapter was selected
+    // If not, set it now (for cases where pagination is triggered from elsewhere)
+    if (mounted && !_isNavigating) {
+      setState(() {
+        _isNavigating = true;
+      });
+      // Trigger dialog rebuild to start pulsating animation
+      _chapterDialogRebuildCallback?.call();
+    } else if (mounted) {
+      // State already set, just trigger rebuild to ensure pulsating continues
+      _chapterDialogRebuildCallback?.call();
+    }
 
-    final previousEngine = _engine;
-    previousEngine?.removeListener(_handleEngineUpdate);
+    try {
+      Size? sizeForMetrics = actualSize ?? _lastActualSize;
+      if (!mounted) {
+        _clearNavigatingState();
+        return;
+      }
+      sizeForMetrics ??= MediaQuery.of(context).size;
+      final baseMetrics = _computePageMetrics(context, sizeForMetrics);
+      final metrics = _adjustForUserPadding(baseMetrics);
 
-    if (!mounted) return;
-    final engine = await LineMetricsPaginationEngine.create(
-      bookId: widget.book.id,
-      blocks: _docBlocks,
-      baseTextStyle: metrics.baseTextStyle,
-      maxWidth: metrics.maxWidth,
-      maxHeight: metrics.maxHeight,
-      textHeightBehavior: metrics.textHeightBehavior,
-      textScaler: metrics.textScaler,
-      cacheManager: null,
-      viewportInsetBottom: metrics.viewportBottomInset,
-    );
+      final previousEngine = _engine;
+      previousEngine?.removeListener(_handleEngineUpdate);
 
-    if (!mounted) return;
-    final targetPageIndex =
-        await engine.ensurePageForCharacter(startCharIndex, windowRadius: 1);
-    engine.addListener(_handleEngineUpdate);
-    unawaited(engine.ensureWindow(targetPageIndex, radius: 1));
-    unawaited(engine.startBackgroundPagination());
+      if (!mounted) {
+        _clearNavigatingState();
+        return;
+      }
+      final engine = await LineMetricsPaginationEngine.create(
+        bookId: widget.book.id,
+        blocks: _docBlocks,
+        baseTextStyle: metrics.baseTextStyle,
+        maxWidth: metrics.maxWidth,
+        maxHeight: metrics.maxHeight,
+        textHeightBehavior: metrics.textHeightBehavior,
+        textScaler: metrics.textScaler,
+        cacheManager: null,
+        viewportInsetBottom: metrics.viewportBottomInset,
+      );
 
-    if (!mounted) return;
-    final initialPage = engine.getPage(targetPageIndex);
-    final updatedTotalChars = math.max(_totalCharacterCount, engine.totalCharacters);
+      if (!mounted) {
+        _clearNavigatingState();
+        return;
+      }
+      final targetPageIndex =
+          await engine.ensurePageForCharacter(startCharIndex, windowRadius: 1);
+      engine.addListener(_handleEngineUpdate);
+      unawaited(engine.ensureWindow(targetPageIndex, radius: 1));
+      unawaited(engine.startBackgroundPagination());
 
-    // Use SchedulerBinding to ensure we're not in a build phase
-    if (mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        setState(() {
-          _engine = engine;
-          _totalPages = engine.estimatedTotalPages;
-          _currentPageIndex = targetPageIndex;
-          _totalCharacterCount = updatedTotalChars;
-          if (initialPage != null) {
-            _currentCharacterIndex = initialPage.startCharIndex;
-            _progress =
-                _calculateProgressForPage(initialPage, totalChars: updatedTotalChars);
-          } else {
-            _currentCharacterIndex = 0;
-            _progress = 0;
+      if (!mounted) {
+        _clearNavigatingState();
+        return;
+      }
+      final initialPage = engine.getPage(targetPageIndex);
+      final updatedTotalChars = math.max(_totalCharacterCount, engine.totalCharacters);
+
+      // Use SchedulerBinding to ensure we're not in a build phase
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          setState(() {
+            _engine = engine;
+            _totalPages = engine.estimatedTotalPages;
+            _currentPageIndex = targetPageIndex;
+            _totalCharacterCount = updatedTotalChars;
+            if (initialPage != null) {
+              _currentCharacterIndex = initialPage.startCharIndex;
+              _progress =
+                  _calculateProgressForPage(initialPage, totalChars: updatedTotalChars);
+              _lastVisibleCharacterIndex = initialPage.endCharIndex;
+              _logLastVisibleWords(initialPage);
+            } else {
+              _currentCharacterIndex = 0;
+              _progress = 0;
+              _lastVisibleCharacterIndex = null;
+            }
+            _showProgressBar = false;
+            _isNavigating = false; // Clear navigating state after UI update
+            _navigatingToChapterIndex = null; // Clear selected chapter index
+          });
+
+          if (mounted) {
+            _resetPagerToCurrent();
+            _scheduleProgressSave();
+            // Close chapter dialog after navigation completes
+            _closeChapterDialog();
           }
-          _showProgressBar = false;
         });
+      }
+    } catch (e) {
+      // Clear navigating state on error
+      _clearNavigatingState();
+      // Close dialog on error
+      _closeChapterDialog();
+      rethrow;
+    }
+  }
 
-        if (mounted) {
-          _resetPagerToCurrent();
-          _scheduleProgressSave();
-        }
+  void _clearNavigatingState() {
+    if (mounted) {
+      setState(() {
+        _isNavigating = false;
+        _navigatingToChapterIndex = null;
       });
     }
+  }
+
+  void _closeChapterDialog() {
+    if (_chapterDialogNavigator != null && _chapterDialogNavigator!.canPop()) {
+      _chapterDialogNavigator!.pop();
+    }
+    _chapterDialogNavigator = null;
+    _chapterDialogRebuildCallback = null;
+    _navigatingToChapterIndex = null;
   }
 
 
@@ -403,6 +465,34 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
       if (page == null) return;
       _saveProgress(page);
     });
+  }
+
+  void _logLastVisibleWords(PageContent page) {
+    if (!kDebugMode) {
+      return;
+    }
+    final words = _extractLastWordsFromPage(page, 10);
+    if (words.isEmpty) {
+      return;
+    }
+    debugPrint('[ReaderScreen] Last visible words: $words');
+  }
+
+  String _extractLastWordsFromPage(PageContent page, int count) {
+    final buffer = StringBuffer();
+    for (final block in page.blocks) {
+      if (block is TextPageBlock) {
+        buffer.write(block.text);
+        buffer.write(' ');
+      }
+    }
+    final text = buffer.toString().trim();
+    if (text.isEmpty) {
+      return '';
+    }
+    final wordList = text.split(RegExp(r'\s+'));
+    final start = math.max(0, wordList.length - count);
+    return wordList.sublist(start).join(' ');
   }
 
   void _handleTapUp(TapUpDetails details) {
@@ -586,11 +676,13 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
       final progress = ReadingProgress(
         bookId: widget.book.id,
         currentCharacterIndex: page.startCharIndex,
+        lastVisibleCharacterIndex: page.endCharIndex,
         progress: pageProgress,
         lastRead: DateTime.now(),
       );
       await _bookService.saveReadingProgress(progress);
       _savedProgress = progress;
+      _logLastVisibleWords(page);
       // Note: updateLastReadingStop is NOT called here anymore
       // It's only called when actually leaving the reader screen
     } catch (_) {
@@ -688,9 +780,12 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
       if (page != null) {
         _currentCharacterIndex = page.startCharIndex;
         _progress = _calculateProgressForPage(page);
+        _lastVisibleCharacterIndex = page.endCharIndex;
+        _logLastVisibleWords(page);
       } else {
         _currentCharacterIndex = 0;
         _progress = 0;
+        _lastVisibleCharacterIndex = null;
       }
     });
 
@@ -722,9 +817,12 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
       if (page != null) {
         _currentCharacterIndex = page.startCharIndex;
         _progress = _calculateProgressForPage(page);
+        _lastVisibleCharacterIndex = page.endCharIndex;
+        _logLastVisibleWords(page);
       } else {
         _currentCharacterIndex = 0;
         _progress = 0;
+        _lastVisibleCharacterIndex = null;
       }
     });
 
@@ -1009,7 +1107,7 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
                   const SizedBox(height: 4),
                   LinearProgressIndicator(
                     value: _progress,
-                    backgroundColor: theme.colorScheme.surfaceVariant,
+                    backgroundColor: theme.colorScheme.surfaceContainerHighest,
                   ),
                 ],
               ),
@@ -1078,10 +1176,56 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
       onGoToChapter: _showChapterSelector,
       onGoToPercentage: _showGoToPercentageDialog,
       onShowSummaryFromBeginning: () => _openSummary(SummaryType.fromBeginning),
-      onShowSummarySinceLastTime: () => _openSummary(SummaryType.sinceLastTime),
       onShowCharactersSummary: () => _openSummary(SummaryType.characters),
+      onDeleteSummaries: () => unawaited(_confirmAndDeleteSummaries()),
       onReturnToLibrary: _returnToLibrary,
     ));
+  }
+
+  Future<void> _confirmAndDeleteSummaries() async {
+    if (!mounted) return;
+    final l10n = AppLocalizations.of(context)!;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l10n.summariesDeleteConfirmTitle),
+        content: Text(l10n.summariesDeleteConfirmBody),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(l10n.cancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: Text(l10n.summariesDeleteConfirmButton),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    if (!await _ensureSummaryServiceReady()) {
+      return;
+    }
+
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      await _summaryService!.deleteBookSummaries(widget.book.id);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text(l10n.summaryDeleted)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text(l10n.resetSummariesError)),
+      );
+    }
   }
 
   Future<void> _returnToLibrary() {
@@ -1092,54 +1236,64 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
   }
 
   void _showChapterSelector() {
+    final navigator = Navigator.of(context);
+    _chapterDialogNavigator = navigator;
+    
     showModalBottomSheet<void>(
       context: context,
-      builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.all(16.0),
-                child: Text(
-                  'Sélectionner un chapitre',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-                ),
-              ),
-              Flexible(
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: _chapterEntries.length,
-                  itemBuilder: (context, index) {
-                    final chapter = _chapterEntries[index];
-                    return ListTile(
-                      title: Text(chapter.title),
-                      onTap: () {
-                        Navigator.pop(context);
-                        _goToChapter(chapter.index);
-                      },
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
+      builder: (dialogContext) {
+        return _ChapterSelectorDialog(
+          chapters: _chapterEntries,
+          getNavigationState: () => _isNavigating,
+          getNavigatingToChapterIndex: () => _navigatingToChapterIndex,
+          onChapterSelected: (chapterIndex) {
+            // Set navigation state immediately (synchronously) for instant feedback
+            setState(() {
+              _isNavigating = true;
+              _navigatingToChapterIndex = chapterIndex;
+            });
+            // Trigger immediate rebuild to show highlighting and start pulsating
+            _chapterDialogRebuildCallback?.call();
+            _goToChapter(chapterIndex);
+          },
+          onRebuildRequested: (callback) {
+            _chapterDialogRebuildCallback = callback;
+          },
         );
       },
-    );
+    ).then((_) {
+      // Clear references when dialog is dismissed (e.g., user swipes down)
+      _chapterDialogNavigator = null;
+      _chapterDialogRebuildCallback = null;
+      _navigatingToChapterIndex = null;
+    });
   }
 
   void _goToChapter(int chapterIndex) {
-    if (_engine == null) return;
+    if (_engine == null) {
+      // Navigation cannot proceed, clear state and close dialog
+      _clearNavigatingState();
+      _closeChapterDialog();
+      return;
+    }
 
     // Find the first page of this chapter
     final pageIndex = _engine!.findPageForChapter(chapterIndex);
-    if (pageIndex == null) return;
+    if (pageIndex == null) {
+      // Chapter page not found, clear state and close dialog
+      _clearNavigatingState();
+      _closeChapterDialog();
+      return;
+    }
 
     // Get that page and navigate to it
     final page = _engine!.getPage(pageIndex);
     if (page != null) {
       _scheduleRepagination(initialCharIndex: page.startCharIndex);
+    } else {
+      // Page not available, clear state and close dialog
+      _clearNavigatingState();
+      _closeChapterDialog();
     }
   }
 
@@ -1203,6 +1357,10 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
         _currentCharacterIndex = currentPage.startCharIndex;
         _progress =
             _calculateProgressForPage(currentPage, totalChars: updatedTotalChars);
+        _lastVisibleCharacterIndex = currentPage.endCharIndex;
+        _logLastVisibleWords(currentPage);
+      } else {
+        _lastVisibleCharacterIndex = null;
       }
     });
   }
@@ -1216,9 +1374,13 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
       return;
     }
 
+    final visibleIndex =
+        _lastVisibleCharacterIndex ?? currentPage.endCharIndex;
+
     final progress = ReadingProgress(
       bookId: widget.book.id,
       currentCharacterIndex: currentPage.startCharIndex,
+      lastVisibleCharacterIndex: visibleIndex,
       progress: _calculateProgressForPage(currentPage),
       lastRead: DateTime.now(),
     );
@@ -1405,7 +1567,7 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
                       width: double.infinity,
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surfaceVariant,
+                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: SingleChildScrollView(
@@ -1425,7 +1587,7 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
                       width: double.infinity,
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surfaceVariant,
+                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: SingleChildScrollView(
@@ -1553,7 +1715,7 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
     final blocks = <DocumentBlock>[];
     bool isFirstBlock = true;
     _InlineCollector? activeCollector;
-    final imageResolver = (String src) => _resolveImageBytes(src, images);
+    Uint8List? imageResolver(String src) => _resolveImageBytes(src, images);
 
     bool isResultEmpty(_InlineContentResult result) {
       final cleaned = result.text.replaceAll('\uFFFC', '').trim();
@@ -1656,7 +1818,7 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
             );
             // Add paragraph break if collector already has content
             if (activeCollector!.hasContent) {
-              activeCollector!.appendLiteral('\n\n');
+              activeCollector!.appendLiteral('\n');
             }
             // Process paragraph content directly into collector
             for (final child in node.nodes) {
@@ -1688,7 +1850,7 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
               cssResolver: cssResolver,
             );
             if (activeCollector!.hasContent) {
-              activeCollector!.appendLiteral('\n\n');
+              activeCollector!.appendLiteral('\n');
             }
             final ordered = name == 'ol';
             int counter = 1;
@@ -2120,6 +2282,156 @@ bool shouldKeepSelectionOnPointerUp({
       now.difference(lastSelectionChangeTimestamp) < deferWindow;
   if (withinDeferWindow) return true;
   return false;
+}
+
+/// Dialog widget that shows chapter list with pulsating effect on selected chapter during navigation.
+class _ChapterSelectorDialog extends StatefulWidget {
+  const _ChapterSelectorDialog({
+    required this.chapters,
+    required this.getNavigationState,
+    required this.getNavigatingToChapterIndex,
+    required this.onChapterSelected,
+    required this.onRebuildRequested,
+  });
+
+  final List<_ChapterEntry> chapters;
+  final bool Function() getNavigationState;
+  final int? Function() getNavigatingToChapterIndex;
+  final void Function(int) onChapterSelected;
+  final void Function(VoidCallback) onRebuildRequested;
+
+  @override
+  State<_ChapterSelectorDialog> createState() => _ChapterSelectorDialogState();
+}
+
+class _ChapterSelectorDialogState extends State<_ChapterSelectorDialog> {
+  @override
+  void initState() {
+    super.initState();
+    // Register rebuild callback with parent
+    widget.onRebuildRequested(() {
+      if (mounted) {
+        setState(() {});
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isNavigating = widget.getNavigationState();
+    final navigatingToIndex = widget.getNavigatingToChapterIndex();
+    
+    return SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Text(
+              'Sélectionner un chapitre',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            ),
+          ),
+          Flexible(
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: widget.chapters.length,
+              itemBuilder: (context, index) {
+                final chapter = widget.chapters[index];
+                final isNavigatingTo = isNavigating && navigatingToIndex == chapter.index;
+                return _PulsatingChapterTile(
+                  chapterTitle: chapter.title,
+                  isNavigating: isNavigatingTo,
+                  onTap: () => widget.onChapterSelected(chapter.index),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Chapter tile with pulsating effect when navigation is in progress.
+class _PulsatingChapterTile extends StatefulWidget {
+  const _PulsatingChapterTile({
+    required this.chapterTitle,
+    required this.isNavigating,
+    required this.onTap,
+  });
+
+  final String chapterTitle;
+  final bool isNavigating;
+  final VoidCallback onTap;
+
+  @override
+  State<_PulsatingChapterTile> createState() => _PulsatingChapterTileState();
+}
+
+class _PulsatingChapterTileState extends State<_PulsatingChapterTile>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    );
+    _animation = Tween<double>(
+      begin: 0.3,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeInOut,
+    ));
+    
+    if (widget.isNavigating) {
+      _controller.repeat(reverse: true);
+    }
+  }
+
+  @override
+  void didUpdateWidget(_PulsatingChapterTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isNavigating && !oldWidget.isNavigating) {
+      _controller.repeat(reverse: true);
+    } else if (!widget.isNavigating && oldWidget.isNavigating) {
+      _controller.stop();
+      _controller.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    
+    return AnimatedBuilder(
+      animation: _animation,
+      builder: (context, child) {
+        return ListTile(
+          title: Text(widget.chapterTitle),
+          onTap: widget.onTap,
+          selected: widget.isNavigating,
+          selectedTileColor: widget.isNavigating
+              ? theme.colorScheme.primary.withOpacity(_animation.value * 0.2)
+              : null,
+          tileColor: widget.isNavigating
+              ? theme.colorScheme.primary.withOpacity(_animation.value * 0.2)
+              : null,
+        );
+      },
+    );
+  }
 }
 
 /// Widget that completely separates reader navigation gestures from text selection.
