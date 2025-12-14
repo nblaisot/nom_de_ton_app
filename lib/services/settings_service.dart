@@ -73,7 +73,7 @@ class SettingsService {
 
     if (raw is double) {
       // Clamp to current allowed range to avoid storing bad data
-      final clamped = raw.clamp(0.5, 2.0);
+      final clamped = raw.clamp(0.5, 3.0);
       if (clamped != raw) {
         await prefs.setDouble(_readerFontScaleKey, clamped);
       }
@@ -83,10 +83,10 @@ class SettingsService {
     return 1.0;
   }
 
-  /// Persist the reader font scale multiplier (clamped between 0.5 and 2.0)
+  /// Persist the reader font scale multiplier (clamped between 0.5 and 3.0)
   Future<void> saveReaderFontScale(double scale) async {
     final prefs = await SharedPreferences.getInstance();
-    final clampedScale = scale.clamp(0.5, 2.0);
+    final clampedScale = scale.clamp(0.5, 3.0);
     await prefs.setDouble(_readerFontScaleKey, clampedScale);
   }
 
