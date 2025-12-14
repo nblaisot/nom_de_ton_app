@@ -16,7 +16,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.memoreader"
+    namespace = "com.blaisotbalette.memoreader"
     // Use maxOf to ensure compileSdk is at least 35 for 16 KB page size support (Android 15+ requirement)
     // This respects Flutter's SDK management while ensuring compliance with Google Play requirements
     compileSdk = maxOf(flutter.compileSdkVersion, 35)
@@ -35,7 +35,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.memoreader"
+        applicationId = "com.blaisotbalette.memoreader"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
