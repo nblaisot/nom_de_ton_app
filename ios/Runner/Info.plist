@@ -67,5 +67,7 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>This app does not access your photo library. This permission is requested by a third-party library but is not used.</string>
 </dict>
 </plist>
