@@ -582,18 +582,21 @@ _PageMetrics _adjustForUserPadding(_PageMetrics metrics) {
 
   void _handlePointerDown(PointerDownEvent event) {
     // READER MODE ONLY: This method is only called when selection is NOT active
-    // CRITICAL: Don't track anything here - let SelectableText's gesture recognizer
-    // win the gesture arena for taps and long presses. We'll only track if it becomes
-    // a clear swipe gesture (detected in pointer move).
+    // 
+    // IMPORTANT: We only store the pointer info here for later reference.
+    // We do NOT claim or interfere with the gesture - SelectableText's gesture
+    // recognizer should be allowed to handle long presses for text selection.
+    // 
+    // The actual decision about whether to handle this as a tap (for navigation)
+    // happens in _handlePointerUp, where we check if it was a short tap (not
+    // long press) and didn't exceed slop (not a swipe).
     if (!_shouldTrackPointer(event) || _activeTapPointer != null) {
       return;
     }
-    // Store minimal info but don't interfere with gesture detection
     _activeTapPointer = event.pointer;
     _activeTapDownPosition = event.position;
     _activeTapDownTime = DateTime.now();
     _activeTapExceededSlop = false;
-    // Don't do anything else - let SelectableText handle the gesture
   }
 
   void _handlePointerMove(PointerMoveEvent event) {
@@ -2786,8 +2789,15 @@ class _ReaderGestureWrapper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Always use Listener but defer to child (SelectableText) for selection gestures
-    // This allows both reader navigation and text selection to coexist
+    // When selection is active, completely disable reader gesture handling
+    // This prevents any interference with text selection handle manipulation
+    if (isSelectionActive) {
+      return child;
+    }
+    
+    // In READER MODE: use Listener with deferToChild behavior
+    // This allows SelectableText to handle long press for selection while
+    // we track pointer events for tap navigation and swipe detection
     return Listener(
       behavior: HitTestBehavior.deferToChild,
       onPointerDown: onPointerDown,

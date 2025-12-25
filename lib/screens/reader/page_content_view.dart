@@ -158,20 +158,9 @@ class _PageContentViewState extends State<PageContentView> {
                   // Update internal state
                   _selectedText = newSelectedText ?? '';
 
-                  // Only show toolbar if we have a valid selection
-                  if (hasSelection && _selectedText.isNotEmpty) {
-                    final editableTextState = _selectableTextKey.currentContext
-                        ?.findAncestorStateOfType<EditableTextState>();
-                    if (editableTextState != null) {
-                      // Schedule toolbar to show on next frame to ensure layout is complete
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted) {
-                          editableTextState.showToolbar();
-                        }
-                      });
-                    }
-                  }
-
+                  // Let Flutter's SelectableText handle showing handles and toolbar
+                  // automatically - manual showToolbar() calls can interfere with
+                  // the selection overlay state and cause handles to not appear
                   widget.onSelectionChanged?.call(hasSelection, _clearSelection);
                 },
               ),
@@ -223,20 +212,10 @@ class _PageContentViewState extends State<PageContentView> {
               
               // Update internal state
               _selectedText = selected;
-              // Only show toolbar if we have a valid selection
-              if (hasSelection && _selectedText.isNotEmpty) {
-                final editableTextState = _selectableTextKey.currentContext
-                    ?.findAncestorStateOfType<EditableTextState>();
-                if (editableTextState != null) {
-                   // Schedule toolbar to show on next frame to ensure layout is complete
-                   WidgetsBinding.instance.addPostFrameCallback((_) {
-                     if (mounted) {
-                       editableTextState.showToolbar();
-                     }
-                   });
-                }
-              }
 
+              // Let Flutter's SelectableText handle showing handles and toolbar
+              // automatically - manual showToolbar() calls can interfere with
+              // the selection overlay state and cause handles to not appear
               widget.onSelectionChanged?.call(hasSelection, _clearSelection);
             },
           ),
